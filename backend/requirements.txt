@@ -5,6 +5,11 @@
 # Directas
 fastapi==0.143.2
 uvicorn==0.54.0
+# Base de datos y configuración (T05)
+sqlalchemy==2.1.4
+alembic==1.20.0
+psycopg[binary]==3.3.6
+pydantic-settings==2.15.0
 
 # Transitivas de fastapi
 annotated-doc==0.0.5
@@ -22,3 +27,14 @@ typing-inspection==0.4.4
 click==8.5.0
 colorama==0.4.6 ; sys_platform == "win32"
 h11==0.16.0
+
+# Transitivas de alembic
+mako==1.4.3
+markupsafe==3.0.4
+
+# Transitivas de psycopg
+psycopg-binary==3.3.6
+tzdata==2026.5 ; sys_platform == "win32"
+
+# Transitivas de pydantic-settings
+python-dotenv==1.2.4

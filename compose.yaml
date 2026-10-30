@@ -1,0 +1,28 @@
+# Proyecto Docker Compose de crm-demo. Por ahora solo PostgreSQL (T05).
+# Los valores salen de .env (copiar de .env.example). Este archivo es común a
+# local y servidor; la publicación de puertos al host va en compose.override.yaml.
+name: crm-demo
+
+services:
+  db:
+    # PostgreSQL 18.4 sobre Debian 13 (trixie), fijado por digest (T05, 30/10/2026).
+    # 18.6 salió el 28/10: se revisará cuando cumpla la regla de dos semanas.
+    image: postgres:18.4-trixie@sha256:a02db8cac496f15b094798a38254f14d6e00741f709360e5e00bb6668ea31636
+    environment:
+      POSTGRES_DB: ${CRM_DB_NAME:?Falta CRM_DB_NAME en .env}
+      POSTGRES_USER: ${CRM_DB_USER:?Falta CRM_DB_USER en .env}
+      POSTGRES_PASSWORD: ${CRM_DB_PASSWORD:?Falta CRM_DB_PASSWORD en .env}
+    volumes:
+      # Volumen con nombre (el "trastero"): sobrevive a "docker compose down".
+      # Solo "down -v" lo borra. En PostgreSQL 18 se monta /var/lib/postgresql.
+      - db_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  db_data:

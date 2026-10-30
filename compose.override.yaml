@@ -1,0 +1,7 @@
+# Solo desarrollo local. Docker Compose lo aplica automáticamente junto a compose.yaml.
+# Publica PostgreSQL únicamente en 127.0.0.1 (el "telefonillo" que solo suena desde
+# este portátil), para que la API nativa de Windows pueda conectarse.
+services:
+  db:
+    ports:
+      - "127.0.0.1:${CRM_DB_PORT:-5432}:5432"
