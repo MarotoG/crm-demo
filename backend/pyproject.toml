@@ -1,0 +1,4 @@
+[tool.pytest.ini_options]
+# Permite "from app.main import app" en las pruebas al ejecutar pytest desde backend/.
+pythonpath = ["."]
+testpaths = ["tests"]

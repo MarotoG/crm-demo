@@ -1,0 +1,24 @@
+# Dependencias de ejecución de la API, fijadas con todas sus transitivas.
+# Criterio (T04, 30/10/2026): ninguna versión publicada después del 16/10/2026.
+# Instalar con: .venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+
+# Directas
+fastapi==0.143.2
+uvicorn==0.54.0
+
+# Transitivas de fastapi
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.15.1
+idna==3.20
+opentelemetry-api==1.45.1
+pydantic==2.14.1
+pydantic-core==2.50.1
+starlette==1.8.0
+typing-extensions==4.16.0
+typing-inspection==0.4.4
+
+# Transitivas de uvicorn
+click==8.5.0
+colorama==0.4.6 ; sys_platform == "win32"
+h11==0.16.0

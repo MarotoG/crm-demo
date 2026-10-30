@@ -1,6 +1,6 @@
 # crm-demo — CRM para pequeñas clínicas estéticas
 
-> **Estado: en desarrollo (Trabajo Fin de Máster, entrega noviembre de 2026).** Todavía no hay código ejecutable. Este README es provisional y se completará con hechos comprobados a medida que avance el proyecto.
+> **Estado: en desarrollo (Trabajo Fin de Máster, entrega noviembre de 2026).** Por ahora solo existe el esqueleto de la API (endpoint de salud y una prueba); sin base de datos ni funcionalidades del CRM. Este README es provisional y se completará con hechos comprobados a medida que avance el proyecto.
 
 ## Descripción
 
@@ -30,7 +30,30 @@ documentacion/  especificaciones, backlog y estado del proyecto
 
 ## Instalación y ejecución
 
-Pendiente. Requisitos previstos: Git, Python 3.13, Node.js 24 LTS y Docker Desktop. La configuración se hará copiando `.env.example` a `.env`.
+Requisitos previstos: Git, Python 3.13, Node.js 24 LTS y Docker Desktop. La configuración se hará copiando `.env.example` a `.env` (la API todavía no lee ninguna variable).
+
+### Backend (API) en Windows
+
+Comandos comprobados en Windows 11 con PowerShell 5.1 y Python 3.13.0. Se usa `py -3.13` explícitamente porque el Python predeterminado del equipo puede ser otro.
+
+```powershell
+cd backend
+py -3.13 -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+
+# Pruebas
+.venv\Scripts\python.exe -m pytest -v
+
+# Arrancar la API en desarrollo (Ctrl+C para parar)
+.venv\Scripts\python.exe -m uvicorn app.main:app --reload
+```
+
+Con la API en marcha:
+
+- `http://127.0.0.1:8000/api/health` → `{"status":"ok"}`
+- `http://127.0.0.1:8000/docs` → documentación interactiva (Swagger UI; carga sus estilos y scripts desde un CDN, necesita Internet)
+
+Dependencias: `requirements.txt` (ejecución) y `requirements-dev.txt` (pruebas), con todas las versiones fijadas, incluidas las transitivas.
 
 ## Pendiente de completar
 

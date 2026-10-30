@@ -1,0 +1,17 @@
+# Dependencias de desarrollo y pruebas (incluye las de ejecución).
+-r requirements.txt
+
+# Directas
+pytest==9.1.1
+# TestClient de Starlette 1.8 usa httpx2; con httpx clásico avisa de obsolescencia.
+httpx2==2.13.1
+
+# Transitivas de pytest
+iniconfig==2.3.1
+packaging==26.3
+pluggy==1.7.0
+pygments==2.21.0
+
+# Transitivas de httpx2
+httpcore2==2.13.1
+truststore==0.10.5
