@@ -1,0 +1,37 @@
+# Referencia académica local y material auxiliar
+/materiales_sintetizados_vscode/
+/ZZZIGNORAR/
+
+# documentacion/: solo se publican los documentos del producto.
+# Guías y prompts del tutor, síntesis del máster, borrador y contexto
+# del servidor (14) se quedan en local.
+/documentacion/*
+!/documentacion/04_ESTADO_CRM.md
+!/documentacion/07_MATRIZ_CUMPLIMIENTO_TFM.md
+!/documentacion/10_ESPECIFICACIONES_CRM_CLINICAS.md
+!/documentacion/11_BACKLOG_ATOMICO_CRM.md
+
+# Secretos locales (las plantillas sin valores reales sí se versionan)
+.env
+.env.*
+!.env.example
+!**/.env.example
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node / Vite
+node_modules/
+dist/
+
+# Editor y sistema
+.vscode/*
+!.vscode/extensions.json
+.idea/
+Thumbs.db
+.DS_Store
