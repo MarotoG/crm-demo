@@ -1,0 +1,120 @@
+/* Estilo base mínimo y responsive (móvil primero). */
+
+:root {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  line-height: 1.5;
+  color: #1f2933;
+  background: #f5f7fa;
+  --verde: #1e7d4f;
+  --rojo: #b42318;
+  --gris: #616e7c;
+  --borde: #d9e2ec;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+.pagina {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 1.5rem 1rem;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.75rem;
+}
+
+.subtitulo {
+  margin: 0.25rem 0 1.5rem;
+  color: var(--gris);
+}
+
+.tarjeta {
+  background: #fff;
+  border: 1px solid var(--borde);
+  border-radius: 0.5rem;
+  padding: 1rem;
+}
+
+.tarjeta h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1.125rem;
+}
+
+.estados {
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+}
+
+/* En móvil, nombre y valor uno debajo del otro; en pantallas anchas, en fila. */
+.estado {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--borde);
+}
+
+.estado__nombre {
+  font-weight: 600;
+}
+
+.estado--cargando .estado__valor {
+  color: var(--gris);
+}
+
+.estado--ok .estado__valor {
+  color: var(--verde);
+}
+
+.estado--error .estado__valor {
+  color: var(--rojo);
+}
+
+.estado--ok .estado__valor::before {
+  content: "● ";
+}
+
+.estado--error .estado__valor::before {
+  content: "▲ ";
+}
+
+button {
+  font: inherit;
+  width: 100%;
+  padding: 0.6rem 1rem;
+  min-height: 2.75rem; /* objetivo táctil cómodo */
+  border: 1px solid #334e68;
+  border-radius: 0.375rem;
+  background: #334e68;
+  color: #fff;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+button:focus-visible {
+  outline: 3px solid #9fb3c8;
+  outline-offset: 2px;
+}
+
+@media (min-width: 30rem) {
+  .estado {
+    flex-direction: row;
+    justify-content: space-between;
+  }
+
+  button {
+    width: auto;
+  }
+}

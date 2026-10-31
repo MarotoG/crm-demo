@@ -1,6 +1,6 @@
 # crm-demo — CRM para pequeñas clínicas estéticas
 
-> **Estado: en desarrollo (Trabajo Fin de Máster, entrega noviembre de 2026).** Por ahora existen el esqueleto de la API, PostgreSQL en Docker y la primera migración (tabla de servicios); todavía sin funcionalidades del CRM. Este README es provisional y se completará con hechos comprobados a medida que avance el proyecto.
+> **Estado: en desarrollo (Trabajo Fin de Máster, entrega noviembre de 2026).** Por ahora existen el esqueleto de la API, PostgreSQL en Docker, la primera migración (tabla de servicios) y una interfaz mínima que muestra el estado de la API y de la base de datos; todavía sin funcionalidades del CRM. Este README es provisional y se completará con hechos comprobados a medida que avance el proyecto.
 
 ## Descripción
 
@@ -14,16 +14,16 @@ Núcleo previsto: login con cuatro roles (administración, recepción, profesion
 
 - Backend: Python 3.13 + FastAPI, SQLAlchemy y Alembic
 - Base de datos: PostgreSQL 18.4 (imagen oficial fijada por digest en `compose.yaml`)
-- Frontend: React + TypeScript + Vite
+- Frontend: React 19 + TypeScript 7 + Vite 8
 - Despliegue: Docker Compose
 
-Las versiones exactas se fijan al crear cada parte (backend: `backend/requirements*.txt`).
+Las versiones exactas se fijan al crear cada parte (backend: `backend/requirements*.txt`; frontend: `frontend/package-lock.json`).
 
 ## Estructura prevista
 
 ```
 backend/                API FastAPI, pruebas y migraciones (Alembic)
-frontend/               interfaz React (pendiente)
+frontend/               interfaz React + TypeScript (Vite)
 nginx/                  servidor web y proxy de /api (pendiente)
 compose.yaml            servicios Docker comunes (por ahora, PostgreSQL)
 compose.override.yaml   ajustes solo locales (puerto de la BD en 127.0.0.1)
@@ -32,7 +32,7 @@ documentacion/          especificaciones, backlog y estado del proyecto
 
 ## Instalación y ejecución
 
-Requisitos: Git, Python 3.13, Docker Desktop (backend WSL2) y, más adelante, Node.js 24 LTS. En desarrollo, PostgreSQL corre en Docker y la API se ejecuta directamente en Windows.
+Requisitos: Git, Python 3.13, Node.js 24 LTS y Docker Desktop (backend WSL2). En desarrollo, PostgreSQL corre en Docker y la API y Vite se ejecutan directamente en Windows.
 
 ### 1. Configuración (`.env`)
 
@@ -87,6 +87,19 @@ Con la API en marcha:
 - `http://127.0.0.1:8000/docs` → documentación interactiva (Swagger UI; carga sus estilos y scripts desde un CDN, necesita Internet)
 
 Dependencias: `requirements.txt` (ejecución) y `requirements-dev.txt` (pruebas), con todas las versiones fijadas, incluidas las transitivas.
+
+### 4. Frontend (interfaz) en Windows
+
+Comprobado con Node.js 24.22.1 y npm 11.19.1. En otra terminal, con la API en marcha:
+
+```powershell
+cd frontend
+npm ci              # instala exactamente lo que fija package-lock.json
+npm run dev         # http://127.0.0.1:5173 (Ctrl+C para parar)
+npm run build       # comprueba tipos (tsc) y genera dist/
+```
+
+En desarrollo el navegador solo habla con Vite (puerto 5173), que reenvía `/api/*` a la API (puerto 8000). La página muestra si la API y la base de datos están disponibles, y un error comprensible si no lo están.
 
 ## Pendiente de completar
 

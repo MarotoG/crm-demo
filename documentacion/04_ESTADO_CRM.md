@@ -27,6 +27,7 @@ Datos actuales del servidor (T02b) y decisiones de despliegue (túnel, hostname,
 ## Implementación y evidencias
 
 - Código implementado: esqueleto FastAPI en `backend/` (T04); PostgreSQL 18.4 en Docker Compose, `GET /api/health/db` y primera migración Alembic con la tabla `services` (T05). Sin CRUD.
+- Frontend (T06): React/TypeScript/Vite en `frontend/`, página de estado que consulta `/api/health` y `/api/health/db`. Sin pruebas automáticas de frontend todavía (comprobación de tipos, build y verificación visual).
 - Pruebas del CRM ejecutadas: 5 con pytest (salud, salud de BD con la BD sustituida, configuración), pasan en local el 30/10; conexión real, restricción y persistencia comprobadas a mano (sección T05).
 - Git local: inicializado el 30/10 en rama `main` (encargo B). D: es exFAT, sin propietarios: se añadió `safe.directory D:/CRMProject` a la configuración global de Git. `.gitignore` ampliado, `.gitattributes` (LF), `README.md` provisional y `.env.example` creados; exclusión de biblioteca, `ZZZIGNORAR/`, doc 14 y `.env` comprobada con `git check-ignore`/`git ls-files`. Por decisión del alumno, de `documentacion/` solo se versionan 04, 07, 10 y 11 (lista blanca en `.gitignore`); guías/prompts del tutor, síntesis M12, borrador y doc 14 quedan en local. GitHub: https://github.com/MarotoG/crm-demo — creado por el alumno; push de `main` el 30/10 (commit `1d6cc36`). Comprobado sin credenciales vía API: `visibility: public` y solo los 11 archivos previstos publicados.
 - Despliegue: pendiente; no se ha tocado servidor, DNS, puertos ni túnel.
@@ -69,9 +70,22 @@ T04 cerrado: aprobado por el alumno, commit `a55738f` publicado en GitHub el 30/
 - Evidencia: `pytest -v` → 5 passed. `docker compose up -d db` → healthy en ~6 s. `alembic upgrade head` → `18953254f3b5 (head)`; `\d services` muestra columnas y `ck_services_duration_minutes_positive`; insertar duración 0 se rechaza. API real: BD encendida → `/api/health/db` 200; `docker compose stop db` → 503 en ~3 s y `/api/health` sigue 200; al arrancar, se recupera sola. Persistencia: `docker compose down` (sin `-v`) elimina contenedor y red, el volumen sigue; `up` crea un contenedor nuevo y los 2 servicios de demo y la versión de migración siguen. La contraseña no aparece en el log de la API (comprobado sin mostrarla).
 - Entorno del alumno: activó `python.terminal.useEnvFile` en VS Code (en `.vscode/settings.json`, ignorado por Git): las terminales nuevas reciben las variables del `.env`. Recomendación: desactivarlo (ver conversación).
 
+T05 cerrado: aprobado por el alumno, commit `fa20405` publicado en GitHub el 30/10 (comprobado sin credenciales vía API: 29 archivos, sin `.env`, `.venv`, cachés ni `.vscode`).
+
+## T06 — esqueleto React responsive y conexión API (30/10/2026)
+
+- Escrito a mano en `frontend/` (sin la plantilla de `create vite`, que añade ESLint y ~10 dependencias): `package.json`, `.npmrc` (`save-exact`), `tsconfig.json` (estricto, solo comprobación de tipos), `vite.config.ts`, `index.html`, `src/main.tsx`, `src/App.tsx`, `src/api.ts`, `src/index.css`.
+- Versiones exactas: React/React DOM 19.3.1 (14/10, parche publicado a la vez en todas las ramas de React), Vite 8.3.4, @vitejs/plugin-react 6.1.2, TypeScript 7.0.2, @types/react(-dom) 19.3.0. Instaladas con `npm install --before=2026-10-16`: las 68 entradas de `package-lock.json` (con binarios opcionales de otras plataformas) comprobadas en el registro, ninguna posterior al corte. `npm ci` desde el lockfile: 24 paquetes instalados (25 auditados contando el propio proyecto), 0 vulnerabilidades.
+- Proxy de Vite: el navegador solo habla con `127.0.0.1:5173` y Vite reenvía `/api` a `127.0.0.1:8000`; un único origen como tras nginx, sin CORS.
+- Página: estado de API y BD con estados cargando/ok/error, botón «Volver a comprobar» desactivado mientras carga, `aria-live`, móvil primero (fila en ≥ 30rem). Mensajes por código: 502/504 «La API no responde» (lo genera el proxy), 503 «No disponible», otros «Error del servidor»; sin conexión o sin respuesta en 10 s, mensaje propio.
+- Problema encontrado y corregido: con la BD parada, la segunda petición idéntica a `/api/health/db` tardaba 6 s en vez de 3. Chrome pone en fila GET idénticos simultáneos para reutilizar la caché, y `StrictMode` duplica el efecto en desarrollo. Medido en el navegador (Resource Timing): 3075/6115 ms → con `cache: "no-store"` 3045/3063 ms. Límite del cliente subido de 5 a 10 s, holgado frente a los 3 s de `connect_timeout` de la API.
+- Evidencia: `tsc` 7.0.2 revisa los 4 archivos y detecta un error de tipo provocado (exit 1). `npm run build` → `dist/` (JS 221 kB, 69 kB gzip). `npm run dev`: HTML servido, `/api/health` y `/api/health/db` 200 a través del proxy; BD parada → 503; API apagada → 502 del proxy. Capturas con Chrome headless (perfil temporal) a 375 px y 800 px de los estados todo OK, API caída, BD caída y cargando; guardadas fuera del repositorio, en el scratchpad de la sesión.
+- Sin pruebas automáticas de frontend (Vitest u otra herramienta): se propondrán cuando haya lógica de interfaz con reglas (login, formularios).
+- Revisión previa al commit, pedida por el alumno (30/10): pytest 5 passed; `pip check` limpio; 32 fijados = 32 instalados; `alembic check` sin diferencias entre modelos y BD; `compileall` OK; `npm ls` sin errores (solo dependencias opcionales no usadas); `npm audit` 0; `tsc` OK; Vite 8 y plugin-react 6 exigen Node ^20.19 o ≥22.12 (hay 24.22.1); `docker compose config` válido; sin CRLF. Evaluación SOLID/KISS/YAGNI y riesgos en la conversación. Riesgo detectado: con `python.terminal.useEnvFile` activo, una terminal abierta antes de regenerar `.env` conserva variables `CRM_*` antiguas, que tienen prioridad sobre el `.env` en pydantic-settings y en Compose.
+
 ## Próxima acción
 
-T05 entregado, pendiente de revisión del alumno, commit y push. Siguiente propuesta: T06, esqueleto React/TypeScript/Vite que llama a `/api/health` y muestra el error si falla, pendiente de aprobación.
+T06 entregado, pendiente de revisión del alumno, commit y push. Siguiente propuesta: T07, usuarios ficticios con hash de contraseña y roles, mediante un procedimiento reproducible y sin contraseñas reales en el código. Pendiente de aprobación.
 
 En paralelo, T02b: el alumno puede ejecutar en Quijote los comandos de solo lectura del anexo A del informe y aportar la salida revisada sin secretos; confirmar en Cloudflare si `crm.marotothecreator.com` está libre y en el aula la hora/zona de entrega.
 
@@ -79,11 +93,11 @@ En paralelo, T02b: el alumno puede ejecutar en Quijote los comandos de solo lect
 
 | Campo | Estado |
 |---|---|
-| Tarea actual | T05 entregado en local (pendiente de revisión, commit y push); T01, T03, T04 y encargo B cerrados; T02a documental revisado; T02b real pendiente |
-| Último commit verificado | `a55738f` en `main`, publicado en GitHub (30/10/2026) |
-| Comandos reales de arranque/pruebas | Raíz: `docker compose up -d db`. Desde `backend/`: `.venv\Scripts\python.exe -m pytest -v`; `.venv\Scripts\alembic.exe upgrade head`; `.venv\Scripts\python.exe -m uvicorn app.main:app --reload` (ver README) |
-| Evidencia observada | Inventario local T01; informe Quijote con hash comprobado; local 30/10: pytest 5 passed, PostgreSQL healthy, migración aplicada, `/api/health/db` 200/503, persistencia tras `down`/`up`; servidor no observado |
-| Próximo hito | T06: esqueleto React responsive conectado a `/api/health` |
+| Tarea actual | T06 entregado en local (pendiente de revisión, commit y push); T01, T03, T04, T05 y encargo B cerrados; T02a documental revisado; T02b real pendiente |
+| Último commit verificado | `fa20405` en `main`, publicado en GitHub (30/10/2026) |
+| Comandos reales de arranque/pruebas | Raíz: `docker compose up -d db`. Desde `backend/`: `.venv\Scripts\python.exe -m pytest -v`; `.venv\Scripts\alembic.exe upgrade head`; `.venv\Scripts\python.exe -m uvicorn app.main:app --reload`. Desde `frontend/`: `npm ci`; `npm run dev`; `npm run build` (ver README) |
+| Evidencia observada | Inventario local T01; informe Quijote con hash comprobado; local 30/10: pytest 5 passed, PostgreSQL healthy, migración aplicada, persistencia tras `down`/`up`, interfaz build OK y estados OK/API caída/BD caída verificados en Chrome headless; servidor no observado |
+| Próximo hito | T07: usuarios ficticios con hash y roles |
 
 Conservar una copia principal de este estado en el repositorio cuando exista y trasladarla al cambiar entre ChatGPT, Claude y editor. No hay sincronización automática. Si código y estado difieren, contrastar los hechos antes de actualizar. Las respuestas del usuario sobre prioridades prevalecen sobre suposiciones anteriores del borrador.
 
