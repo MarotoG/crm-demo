@@ -10,6 +10,9 @@
 !/documentacion/07_MATRIZ_CUMPLIMIENTO_TFM.md
 !/documentacion/10_ESPECIFICACIONES_CRM_CLINICAS.md
 !/documentacion/11_BACKLOG_ATOMICO_CRM.md
+# Histórico narrativo por fases: solo local (ya cubierto por la regla anterior;
+# explícito para que no se publique aunque cambie la lista blanca).
+/documentacion/historico/
 
 # Secretos locales (las plantillas sin valores reales sí se versionan)
 .env

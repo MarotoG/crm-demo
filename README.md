@@ -1,6 +1,6 @@
 # crm-demo — CRM para pequeñas clínicas estéticas
 
-> **Estado: en desarrollo (Trabajo Fin de Máster, entrega noviembre de 2026).** Por ahora existen el esqueleto de la API, PostgreSQL en Docker, la primera migración (tabla de servicios) y una interfaz mínima que muestra el estado de la API y de la base de datos; todavía sin funcionalidades del CRM. Este README es provisional y se completará con hechos comprobados a medida que avance el proyecto.
+> **Estado: en desarrollo (Trabajo Fin de Máster, entrega noviembre de 2026).** Por ahora existen el esqueleto de la API, PostgreSQL en Docker, las migraciones de servicios y usuarios, un procedimiento para crear las cuentas de demo (todavía sin login) y una interfaz mínima que muestra el estado de la API y de la base de datos; todavía sin funcionalidades del CRM. Este README es provisional y se completará con hechos comprobados a medida que avance el proyecto.
 
 ## Descripción
 
@@ -100,6 +100,26 @@ npm run build       # comprueba tipos (tsc) y genera dist/
 ```
 
 En desarrollo el navegador solo habla con Vite (puerto 5173), que reenvía `/api/*` a la API (puerto 8000). La página muestra si la API y la base de datos están disponibles, y un error comprensible si no lo están.
+
+### 5. Cuentas de demostración (local)
+
+Hay una cuenta ficticia por rol, con email del dominio reservado `demo.example.com`. Las contraseñas no están en el código: se guardan en el `.env` local y se aplican con un comando. La BD solo guarda su hash Argon2id.
+
+| Rol | Email |
+|---|---|
+| Administración | `admin@demo.example.com` |
+| Recepción | `recepcion@demo.example.com` |
+| Profesional | `profesional@demo.example.com` |
+| Cliente | `cliente@demo.example.com` |
+
+1. En `.env`, rellenar `CRM_DEMO_PASSWORD_ADMIN`, `CRM_DEMO_PASSWORD_RECEPTION`, `CRM_DEMO_PASSWORD_PROFESSIONAL` y `CRM_DEMO_PASSWORD_CLIENT` con contraseñas ficticias de al menos 12 caracteres (por ejemplo, generadas con `py -3.13 -c "import secrets; print(secrets.token_urlsafe(12))"`).
+2. Con la BD en marcha y las migraciones aplicadas, desde `backend/`:
+
+```powershell
+.venv\Scripts\python.exe -m app.seed_demo
+```
+
+El comando se puede repetir: crea las cuentas que falten y, en las existentes, aplica la contraseña actual del `.env`, restaura el rol y las reactiva. Si falta alguna variable o es demasiado corta, no modifica la BD y dice cuál. Nunca muestra contraseñas ni hashes. Todavía no hay pantalla de login (próxima tarea); las credenciales de prueba de la entrega se documentarán al terminarla.
 
 ## Pendiente de completar
 

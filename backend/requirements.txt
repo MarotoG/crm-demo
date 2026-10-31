@@ -38,3 +38,12 @@ tzdata==2026.5 ; sys_platform == "win32"
 
 # Transitivas de pydantic-settings
 python-dotenv==1.2.4
+
+# Hash de contraseñas con Argon2id (T07). Corte: publicado como tarde el 17/10/2026.
+# argon2-cffi-bindings 26.1.0 (20/08) trae wheel abi3 para Windows y Linux.
+argon2-cffi==25.1.0
+
+# Transitivas de argon2-cffi
+argon2-cffi-bindings==26.1.0
+cffi==2.1.1
+pycparser==3.11

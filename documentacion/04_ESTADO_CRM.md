@@ -1,6 +1,6 @@
 # Estado del CRM de clínicas y continuidad entre herramientas
 
-Actualizado: 2026-10-30 tras la entrega local de T04 (esqueleto FastAPI). Este archivo registra contexto; no acredita código ni despliegue por sí mismo: la evidencia está en cada sección.
+Actualizado: 2026-10-31 tras la entrega local de T07 (usuarios y cuentas de demo). Este archivo registra contexto; no acredita código ni despliegue por sí mismo: la evidencia está en cada sección.
 
 ## Confirmado
 
@@ -83,9 +83,21 @@ T05 cerrado: aprobado por el alumno, commit `fa20405` publicado en GitHub el 30/
 - Sin pruebas automáticas de frontend (Vitest u otra herramienta): se propondrán cuando haya lógica de interfaz con reglas (login, formularios).
 - Revisión previa al commit, pedida por el alumno (30/10): pytest 5 passed; `pip check` limpio; 32 fijados = 32 instalados; `alembic check` sin diferencias entre modelos y BD; `compileall` OK; `npm ls` sin errores (solo dependencias opcionales no usadas); `npm audit` 0; `tsc` OK; Vite 8 y plugin-react 6 exigen Node ^20.19 o ≥22.12 (hay 24.22.1); `docker compose config` válido; sin CRLF. Evaluación SOLID/KISS/YAGNI y riesgos en la conversación. Riesgo detectado: con `python.terminal.useEnvFile` activo, una terminal abierta antes de regenerar `.env` conserva variables `CRM_*` antiguas, que tienen prioridad sobre el `.env` en pydantic-settings y en Compose.
 
+T06 cerrado: el alumno comprobó la página en su navegador y aprobó; commit `f65d9bb` publicado en GitHub el 31/10 (comprobado sin credenciales vía API y `raw.githubusercontent.com`). El alumno mantenía entonces `python.terminal.useEnvFile` activo: si `/api/health/db` da 503 inesperado, abrir una terminal nueva y comprobar `Test-Path env:CRM_DB_PASSWORD`.
+
+## T07 — usuarios y cuentas de demo (31/10/2026)
+
+- Decisión del alumno (31/10): las contraseñas de demo viven solo en el `.env` local (ignorado por Git), en `CRM_DEMO_PASSWORD_ADMIN`, `_RECEPTION`, `_PROFESSIONAL` y `_CLIENT`; `.env.example` lleva los nombres vacíos. Qué credenciales se publican en README/formulario (el PDF pide usuario y contraseña de prueba en ambos; el alumno prefiere entregarlas aparte al profesor) se decide antes de la entrega.
+- Dependencia nueva (corte 17/10, comprobada en PyPI con wheel cp313/abi3 para Windows): argon2-cffi 25.1.0 y transitivas argon2-cffi-bindings 26.1.0, cffi 2.1.1, pycparser 3.11 (se evita 3.12, del 22/10). 36 fijados = 36 instalados, `pip check` limpio. Parámetros por defecto: Argon2id, t=3, m=64 MiB, p=4 (RFC 9106, perfil de memoria reducida).
+- `app/models.py`: `Role` (admin, reception, professional, client) y `User` (id, email 254 único, password_hash, role, active). La BD exige rol válido (`ck_users_role_valid`) y email normalizado (`ck_users_email_normalized`, `email = lower(btrim(email))`). El vínculo único con el contacto se añadirá cuando exista `contacts` (T11/T21). Migración `299ce8870114` autogenerada y revisada.
+- `app/security.py`: `hash_password`, `verify_password` (devuelve False ante contraseña errónea o hash corrupto) y `normalize_email`. `app/seed_demo.py`: comando idempotente `python -m app.seed_demo`; valida las cuatro contraseñas (presentes, ≥ 12 caracteres) antes de tocar la BD y escribe las cuatro cuentas en una sola transacción; no muestra contraseñas ni hashes. Emails ficticios en `demo.example.com` (RFC 2606). No es una migración de datos, para no dejar hashes en el historial.
+- Evidencia: `pytest -v` → 13 passed (8 nuevas: formato `$argon2id$`, verificación correcta/errónea, sal distinta, hash corrupto, normalización, validación de variables sin revelar valores, una cuenta por rol); las pruebas eliminan variables `CRM_DEMO_*` del entorno y no dependen del `.env`. `alembic upgrade head` → `299ce8870114`; `downgrade -1` y `upgrade` de nuevo correctos; `alembic check` sin diferencias. `\d users` muestra columnas, `pk_users`, `uq_users_email` y los dos CHECK; con SQL directo y `ROLLBACK` se rechazan email con mayúsculas, rol `superadmin` y email duplicado. Comando sin variables → exit 1, mensaje con las cuatro que faltan, 0 filas. Con contraseñas de un solo uso pasadas como variables del proceso (sin tocar `.env`): 1.ª ejecución crea 4, 2.ª actualiza 4 sin duplicar, 3.ª con contraseñas nuevas: la nueva verifica y la antigua no; ninguna contraseña aparece en la salida; hashes `$argon2id$v=19$m=65536,t=3,p=4$`. Cuenta admin desactivada y con rol cambiado a mano → el comando la reactiva y restaura `admin`. Mensajes correctos en PowerShell 5.1.
+- El alumno rellenó las cuatro `CRM_DEMO_PASSWORD_*` en su `.env` y ejecutó `python -m app.seed_demo` (31/10): «actualizada» en las 4 cuentas, que ya tienen sus contraseñas en lugar de las de prueba.
+- `.vscode/settings.json` tiene `python.terminal.useEnvFile: false` (observado el 31/10); pendiente de que el alumno confirme que lo desactivó.
+
 ## Próxima acción
 
-T06 entregado, pendiente de revisión del alumno, commit y push. Siguiente propuesta: T07, usuarios ficticios con hash de contraseña y roles, mediante un procedimiento reproducible y sin contraseñas reales en el código. Pendiente de aprobación.
+T07 entregado en local, pendiente de revisión del alumno, commit y push (incluye la anotación del hash de T06 en 04 y 07). Siguiente propuesta: T08, login y sesión en BD con cookie (pendiente de aprobación); es el momento previsto para aplicar `Depends` de FastAPI con la sesión de BD y preparar una BD de pruebas.
 
 En paralelo, T02b: el alumno puede ejecutar en Quijote los comandos de solo lectura del anexo A del informe y aportar la salida revisada sin secretos; confirmar en Cloudflare si `crm.marotothecreator.com` está libre y en el aula la hora/zona de entrega.
 
@@ -93,11 +105,13 @@ En paralelo, T02b: el alumno puede ejecutar en Quijote los comandos de solo lect
 
 | Campo | Estado |
 |---|---|
-| Tarea actual | T06 entregado en local (pendiente de revisión, commit y push); T01, T03, T04, T05 y encargo B cerrados; T02a documental revisado; T02b real pendiente |
-| Último commit verificado | `fa20405` en `main`, publicado en GitHub (30/10/2026) |
-| Comandos reales de arranque/pruebas | Raíz: `docker compose up -d db`. Desde `backend/`: `.venv\Scripts\python.exe -m pytest -v`; `.venv\Scripts\alembic.exe upgrade head`; `.venv\Scripts\python.exe -m uvicorn app.main:app --reload`. Desde `frontend/`: `npm ci`; `npm run dev`; `npm run build` (ver README) |
-| Evidencia observada | Inventario local T01; informe Quijote con hash comprobado; local 30/10: pytest 5 passed, PostgreSQL healthy, migración aplicada, persistencia tras `down`/`up`, interfaz build OK y estados OK/API caída/BD caída verificados en Chrome headless; servidor no observado |
-| Próximo hito | T07: usuarios ficticios con hash y roles |
+| Tarea actual | T07 entregado en local (pendiente de revisión, commit y push); T01, T03, T04, T05, T06 y encargo B cerrados; T02a documental revisado; T02b real pendiente |
+| Último commit verificado | `f65d9bb` (T06) en `main`, publicado en GitHub (31/10/2026) |
+| Comandos reales de arranque/pruebas | Raíz: `docker compose up -d db`. Desde `backend/`: `.venv\Scripts\python.exe -m pytest -v`; `.venv\Scripts\alembic.exe upgrade head`; `.venv\Scripts\python.exe -m app.seed_demo`; `.venv\Scripts\python.exe -m uvicorn app.main:app --reload`. Desde `frontend/`: `npm ci`; `npm run dev`; `npm run build` (ver README) |
+| Evidencia observada | Inventario local T01; informe Quijote con hash comprobado; local 30/10: pytest 5 passed, PostgreSQL healthy, migración aplicada, persistencia tras `down`/`up`, interfaz build OK y estados OK/API caída/BD caída verificados en Chrome headless; 31/10: pytest 13 passed, migración `users` aplicada y reversible, cuentas de demo idempotentes con hash Argon2id; servidor no observado |
+| Próximo hito | Cerrar T07; después T08: login y sesión |
+
+Histórico narrativo por fases (decisiones, alternativas descartadas, dónde está cada cosa en el código y preguntas del tribunal) en `documentacion/historico/`, solo local e ignorado por Git; se actualiza al cerrar cada tarea, antes de proponer el commit.
 
 Conservar una copia principal de este estado en el repositorio cuando exista y trasladarla al cambiar entre ChatGPT, Claude y editor. No hay sincronización automática. Si código y estado difieren, contrastar los hechos antes de actualizar. Las respuestas del usuario sobre prioridades prevalecen sobre suposiciones anteriores del borrador.
 
