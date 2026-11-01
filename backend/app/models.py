@@ -1,8 +1,9 @@
 """Modelos de SQLAlchemy. Alembic compara estos modelos con la BD para generar migraciones."""
 
+from datetime import datetime
 from enum import StrEnum
 
-from sqlalchemy import CheckConstraint, MetaData, String, true
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, MetaData, String, func, true
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 # Nombres de restricciones predecibles, para que las migraciones sean estables.
@@ -67,3 +68,20 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(20))
     active: Mapped[bool] = mapped_column(default=True, server_default=true())
+
+
+class UserSession(Base):
+    """Sesión de login guardada en BD (T08): la «pulsera con lista».
+
+    La cookie lleva un token aleatorio; aquí solo se guarda su hash SHA-256, de modo
+    que quien lea esta tabla no puede usar las sesiones. revoked_at lo usará el logout (T09).
+    """
+
+    __tablename__ = "sessions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

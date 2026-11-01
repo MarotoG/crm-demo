@@ -43,13 +43,22 @@ def run_migrations_online() -> None:
 
     Se conecta a PostgreSQL y aplica las migraciones en una transacción.
     """
+    # crm-demo: las pruebas pasan su propia conexión (BD crm_demo_test) en
+    # config.attributes["connection"]; en uso normal se conecta a la BD del .env.
+    connection = config.attributes.get("connection")
+    if connection is not None:
+        _run_with(connection)
+        return
+
     connectable = create_engine(database_url, poolclass=pool.NullPool)
-
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        _run_with(connection)
 
-        with context.begin_transaction():
-            context.run_migrations()
+
+def _run_with(connection) -> None:
+    context.configure(connection=connection, target_metadata=target_metadata)
+    with context.begin_transaction():
+        context.run_migrations()
 
 
 if context.is_offline_mode():

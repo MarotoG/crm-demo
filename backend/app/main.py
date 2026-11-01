@@ -5,14 +5,26 @@ Arranque en desarrollo (desde backend/):
 """
 
 import logging
+from collections.abc import Callable
 
-from fastapi import FastAPI, Response, status
+from fastapi import Depends, FastAPI, Request, Response, status
+from fastapi.responses import JSONResponse
+from sqlalchemy.exc import OperationalError
 
-from app.db import check_database
+from app.auth_routes import router as auth_router
+from app.db import get_database_check
 
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="crm-demo API", version="0.1.0")
+app.include_router(auth_router)
+
+
+@app.exception_handler(OperationalError)
+def bd_no_disponible(request: Request, exc: OperationalError) -> JSONResponse:
+    """Sin conexión con PostgreSQL en cualquier ruta: 503 sin detalles, no un 500 genérico."""
+    logger.error("BD no disponible en %s %s: %s", request.method, request.url.path, type(exc.orig).__name__)
+    return JSONResponse({"detail": "Servicio no disponible"}, status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
 
 
 @app.get("/api/health", tags=["sistema"])
@@ -26,7 +38,9 @@ def health() -> dict[str, str]:
 
 
 @app.get("/api/health/db", tags=["sistema"])
-def health_db(response: Response) -> dict[str, str]:
+def health_db(
+    response: Response, check_database: Callable[[], None] = Depends(get_database_check)
+) -> dict[str, str]:
     """Comprueba que la API puede consultar PostgreSQL."""
     try:
         check_database()

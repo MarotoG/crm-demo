@@ -1,6 +1,6 @@
 # Estado del CRM de clínicas y continuidad entre herramientas
 
-Actualizado: 2026-10-31 tras la entrega local de T07 (usuarios y cuentas de demo). Este archivo registra contexto; no acredita código ni despliegue por sí mismo: la evidencia está en cada sección.
+Actualizado: 2026-10-31 tras la entrega local de T08 (login y sesión en servidor). Este archivo registra contexto; no acredita código ni despliegue por sí mismo: la evidencia está en cada sección.
 
 ## Confirmado
 
@@ -95,9 +95,19 @@ T06 cerrado: el alumno comprobó la página en su navegador y aprobó; commit `f
 - El alumno rellenó las cuatro `CRM_DEMO_PASSWORD_*` en su `.env` y ejecutó `python -m app.seed_demo` (31/10): «actualizada» en las 4 cuentas, que ya tienen sus contraseñas en lugar de las de prueba.
 - `.vscode/settings.json` tiene `python.terminal.useEnvFile: false` (observado el 31/10); pendiente de que el alumno confirme que lo desactivó.
 
+T07 cerrado: aprobado por el alumno, commit `e42670a` publicado en GitHub el 31/10 (comprobado sin credenciales vía API: 12 archivos en el commit, 53 rastreados, sin `.env`, `historico/`, `.vscode`, `.venv` ni biblioteca; `seed_demo.py` accesible en `raw.githubusercontent.com`).
+
+## T08 — login y sesión en servidor (31/10/2026)
+
+- Decisiones del alumno (31/10): sesión de 8 h fijas; límite de 5 fallos en 15 min por (IP, email normalizado) con 429, sin bloquear la cuenta, en memoria; implementación propia y pequeña (tras explicarle sesión en servidor frente a cookie sellada, fastapi-users y SessionMiddleware); BD de pruebas `crm_demo_test` en el mismo contenedor. Por defecto aceptados: token de 32 bytes con solo su SHA-256 en BD, cookie `crm_session` HttpOnly, SameSite=Lax, Secure salvo `CRM_ENV=development`, Max-Age 8 h; 401 genérico con tiempo similar (hash ficticio si el email no existe); logout y CSRF en T09.
+- Código: modelo `UserSession` (tabla `sessions`: token_hash único, user_id con `ON DELETE CASCADE` e índice, created/expires/revoked_at con zona); migración `a9c4f93aec77`. `app/auth.py` (`authenticate`, `create_session`, `get_current_user`, `LoginRateLimiter` con tope de memoria); `app/auth_routes.py` (`POST /api/auth/login`, `GET /api/auth/me`, longitudes máximas 254/1024). `app/db.py`: `get_db` (Depends) y `get_database_check`; `/api/health/db` recibe la comprobación por Depends (se elimina `monkeypatch`) y sigue dando 503 aunque falte el `.env`. Manejador global: `OperationalError` → 503 «Servicio no disponible» (antes 500). `migrations/env.py` acepta una conexión externa (pruebas). Sin dependencias nuevas.
+- Pruebas: `tests/conftest.py` crea y migra `crm_demo_test`, una transacción deshecha por prueba, salvaguarda de nombre `_test` y barrera que hace fallar cualquier prueba que use la BD sin el fixture `db`; sin PostgreSQL esas pruebas se saltan. `pytest` → 45 passed (BD encendida) / 24 passed + 21 skipped (BD apagada). 10 mutaciones deliberadas (sin comprobar activo, caducidad, revocación, HttpOnly, reinicio del contador, normalización en el limitador, longitud máxima, token en claro, health_db) → las 10 detectadas. `crm_demo` intacta (4 usuarios, 0 sesiones) y `crm_demo_test` sin filas tras las pruebas.
+- API real: `/api/auth/me` sin cookie o con token falso → 401; datos vacíos → 422; 5 fallos → el 6.º 429; tiempos con email existente/inexistente ~0,15 s ambos; BD parada → login y me 503 en ~3 s, log sin tokens ni contraseñas, recuperación al arrancar. Login correcto con contraseña real de demo: comprobado por el alumno con `Get-Credential` + `Invoke-RestMethod` contra `/api/auth/login` y `/api/auth/me`. Repetido el 01/11 antes del commit: `pytest` → 45 passed, `alembic check` sin diferencias.
+- Revisión general (pedida por el alumno): pip check, 36 = 36, `alembic check`, compileall, `npm run build`, `npm audit` 0, Compose válido, sin CRLF. Casos límite y riesgos en la conversación y en `historico/T08_historico.md`: IP del proxy en producción (el limitador se volvería por email global), limitador por proceso, sesiones caducadas sin purga, caracteres invisibles en emails, carrera de dos `seed_demo` (la segunda falla con UniqueViolation, sin duplicados).
+
 ## Próxima acción
 
-T07 entregado en local, pendiente de revisión del alumno, commit y push (incluye la anotación del hash de T06 en 04 y 07). Siguiente propuesta: T08, login y sesión en BD con cookie (pendiente de aprobación); es el momento previsto para aplicar `Depends` de FastAPI con la sesión de BD y preparar una BD de pruebas.
+T08 entregado en local, pendiente de revisión del alumno, commit y push (incluye la anotación de `e42670a` en 04 y 07). Siguiente propuesta: T09, logout (revocar sesión), protección CSRF y permisos básicos por rol con pruebas negativas. Pendiente de aprobación.
 
 En paralelo, T02b: el alumno puede ejecutar en Quijote los comandos de solo lectura del anexo A del informe y aportar la salida revisada sin secretos; confirmar en Cloudflare si `crm.marotothecreator.com` está libre y en el aula la hora/zona de entrega.
 
@@ -105,11 +115,11 @@ En paralelo, T02b: el alumno puede ejecutar en Quijote los comandos de solo lect
 
 | Campo | Estado |
 |---|---|
-| Tarea actual | T07 entregado en local (pendiente de revisión, commit y push); T01, T03, T04, T05, T06 y encargo B cerrados; T02a documental revisado; T02b real pendiente |
-| Último commit verificado | `f65d9bb` (T06) en `main`, publicado en GitHub (31/10/2026) |
+| Tarea actual | T08 entregado en local (pendiente de revisión, commit y push); T01, T03, T04, T05, T06, T07 y encargo B cerrados; T02a documental revisado; T02b real pendiente |
+| Último commit verificado | `e42670a` (T07) en `main`, publicado en GitHub (31/10/2026) |
 | Comandos reales de arranque/pruebas | Raíz: `docker compose up -d db`. Desde `backend/`: `.venv\Scripts\python.exe -m pytest -v`; `.venv\Scripts\alembic.exe upgrade head`; `.venv\Scripts\python.exe -m app.seed_demo`; `.venv\Scripts\python.exe -m uvicorn app.main:app --reload`. Desde `frontend/`: `npm ci`; `npm run dev`; `npm run build` (ver README) |
-| Evidencia observada | Inventario local T01; informe Quijote con hash comprobado; local 30/10: pytest 5 passed, PostgreSQL healthy, migración aplicada, persistencia tras `down`/`up`, interfaz build OK y estados OK/API caída/BD caída verificados en Chrome headless; 31/10: pytest 13 passed, migración `users` aplicada y reversible, cuentas de demo idempotentes con hash Argon2id; servidor no observado |
-| Próximo hito | Cerrar T07; después T08: login y sesión |
+| Evidencia observada | Inventario local T01; informe Quijote con hash comprobado; local 30/10: pytest 5 passed, PostgreSQL healthy, migración aplicada, persistencia tras `down`/`up`, interfaz build OK y estados OK/API caída/BD caída verificados en Chrome headless; 31/10: pytest 13 passed, migración `users` aplicada y reversible, cuentas de demo idempotentes con hash Argon2id; T08: pytest 45 passed con BD de pruebas, 10/10 mutaciones detectadas, login/me/429/503 en API real; servidor no observado |
+| Próximo hito | Cerrar T08; después T09: logout, CSRF y permisos |
 
 Histórico narrativo por fases (decisiones, alternativas descartadas, dónde está cada cosa en el código y preguntas del tribunal) en `documentacion/historico/`, solo local e ignorado por Git; se actualiza al cerrar cada tarea, antes de proponer el commit.
 
