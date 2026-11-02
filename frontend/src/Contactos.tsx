@@ -19,6 +19,14 @@ import { useSesion } from "./sesion";
 /** Espera tras la última tecla antes de buscar: no se lanza una petición por letra. */
 export const PAUSA_BUSQUEDA_MS = 300;
 
+// Sin tildes (T12b): el MVP es para clínicas de EE. UU. El mismo texto que da la API (422).
+export const AVISO_TILDES = "No se permiten tildes ni caracteres especiales (á, ñ, ü…)";
+
+/** Cualquier carácter fuera de ASCII: tildes, ñ, ü, emojis, letras de otros alfabetos… */
+export function tieneTildes(texto: string): boolean {
+  return [...texto].some((c) => c.charCodeAt(0) > 0x7f);
+}
+
 export const NOMBRE_ORIGEN: Record<OrigenContacto, string> = {
   instagram: "Instagram",
   facebook: "Facebook",
@@ -110,8 +118,20 @@ export default function Contactos() {
 
       <label className="buscador">
         Buscar por nombre, apellidos, email o teléfono
-        <input type="search" value={texto} maxLength={100} onChange={(e) => setTexto(e.target.value)} />
+        <input
+          type="search"
+          value={texto}
+          maxLength={100}
+          aria-describedby={tieneTildes(texto) ? "aviso-busqueda" : undefined}
+          onChange={(e) => setTexto(e.target.value)}
+        />
       </label>
+      {/* Se busca igual (no encontrará nada): el aviso recuerda la norma a quien la olvide. */}
+      {tieneTildes(texto) && (
+        <p className="aviso-campo" id="aviso-busqueda">
+          {AVISO_TILDES}
+        </p>
+      )}
 
       {lista.tipo === "cargando" && <p>Cargando contactos…</p>}
       {lista.tipo === "error" && (
@@ -177,6 +197,8 @@ const ETIQUETAS: Record<Campo, string> = {
   source: "Origen",
 };
 
+const CAMPOS_SIN_TILDES: Campo[] = ["first_name", "last_name", "email"];
+
 function FormularioContacto({ alCrear, alCancelar }: { alCrear: (c: Contacto) => void; alCancelar: () => void }) {
   const { estado, caducada } = useSesion();
   const [datos, setDatos] = useState(VACIO);
@@ -190,9 +212,13 @@ function FormularioContacto({ alCrear, alCancelar }: { alCrear: (c: Contacto) =>
     evento.preventDefault();
     setErrores({});
     setGeneral([]);
-    // El origen se comprueba aquí para dar el mensaje en español; el resto lo valida la API.
-    if (!datos.source) {
-      setErrores({ source: "Elige de dónde llegó el contacto" });
+    // Tildes y origen se comprueban aquí para avisar sin esperar a la API (que repite las
+    // tildes y daría el origen en inglés); el resto lo valida la API.
+    const previos: Partial<Record<Campo, string>> = {};
+    for (const nombre of CAMPOS_SIN_TILDES) if (tieneTildes(datos[nombre])) previos[nombre] = AVISO_TILDES;
+    if (!datos.source) previos.source = "Elige de dónde llegó el contacto";
+    if (!datos.source || Object.keys(previos).length) {
+      setErrores(previos);
       return;
     }
     setGuardando(true);
@@ -212,8 +238,16 @@ function FormularioContacto({ alCrear, alCancelar }: { alCrear: (c: Contacto) =>
     }
   }
 
+  /** Al cambiar un campo, su error anterior deja de valer: si no, seguiría visible ya corregido. */
+  function cambiar(nombre: Campo, valor: string) {
+    setDatos({ ...datos, [nombre]: valor });
+    setErrores(({ [nombre]: _anterior, ...resto }) => resto);
+  }
+
   function campo(nombre: Campo, tipo: "text" | "email" | "tel", autoComplete: string) {
-    const error = errores[nombre];
+    // El aviso de tildes sale mientras se escribe, sin esperar a pulsar «Guardar».
+    const error =
+      errores[nombre] ?? (CAMPOS_SIN_TILDES.includes(nombre) && tieneTildes(datos[nombre]) ? AVISO_TILDES : undefined);
     // El error va fuera de la etiqueta: si no, formaría parte del nombre del campo al leerlo.
     return (
       <div className="campo">
@@ -226,7 +260,7 @@ function FormularioContacto({ alCrear, alCancelar }: { alCrear: (c: Contacto) =>
           maxLength={nombre === "email" ? 254 : 100}
           aria-invalid={error ? true : undefined}
           aria-describedby={error ? `error-${nombre}` : undefined}
-          onChange={(e) => setDatos({ ...datos, [nombre]: e.target.value })}
+          onChange={(e) => cambiar(nombre, e.target.value)}
         />
         {error && (
           <span className="error" id={`error-${nombre}`}>
@@ -251,7 +285,7 @@ function FormularioContacto({ alCrear, alCancelar }: { alCrear: (c: Contacto) =>
           value={datos.source}
           aria-invalid={errores.source ? true : undefined}
           aria-describedby={errores.source ? "error-source" : undefined}
-          onChange={(e) => setDatos({ ...datos, source: e.target.value as OrigenContacto | "" })}
+          onChange={(e) => cambiar("source", e.target.value)}
         >
           <option value="">Elige el origen…</option>
           {Object.entries(NOMBRE_ORIGEN).map(([valor, nombre]) => (

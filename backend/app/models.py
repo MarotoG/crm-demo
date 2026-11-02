@@ -121,6 +121,11 @@ def _name_normalized(column: str) -> str:
     return rf"{column} = btrim(regexp_replace({column}, '\s+', ' ', 'g')) AND {column} <> ''"
 
 
+def _name_ascii(column: str) -> str:
+    # Empieza por letra; después letras sin tilde, espacio, punto, apóstrofo ('' en SQL) o guion.
+    return f"{column} ~ '^[A-Za-z][A-Za-z .''-]*$'"
+
+
 class Contact(Base):
     """Ficha de una persona: lead y después cliente, sin duplicarla (T11).
 
@@ -136,6 +141,10 @@ class Contact(Base):
         CheckConstraint(r"phone ~ '^\+[1-9][0-9]{7,14}$'", name="phone_e164"),
         CheckConstraint(_name_normalized("first_name"), name="first_name_normalized"),
         CheckConstraint(_name_normalized("last_name"), name="last_name_normalized"),
+        # Sin tildes (T12b): la misma lista cerrada que app/validators.py.
+        CheckConstraint(_name_ascii("first_name"), name="first_name_ascii"),
+        CheckConstraint(_name_ascii("last_name"), name="last_name_ascii"),
+        CheckConstraint("email ~ '^[!-~]+$'", name="email_ascii"),
         CheckConstraint(_in_list("source", ContactSource), name="source_valid"),
         CheckConstraint(_in_list("status", ContactStatus), name="status_valid"),
         # Duplicados (decisión T11): el email o el teléfono pueden repetirse (una familia),

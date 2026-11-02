@@ -223,6 +223,17 @@ select:focus-visible {
   font-weight: 600;
 }
 
+/* Mensajes cortos bajo un campo (errores y aviso de tildes, T12b). */
+.campo .error,
+.aviso-campo {
+  font-size: 0.875rem;
+}
+
+.aviso-campo {
+  margin: 0 0 0.5rem;
+  color: var(--rojo);
+}
+
 .acciones {
   display: flex;
   flex-wrap: wrap;

@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
 import type { Contacto } from "./api";
-import { formatoTelefono } from "./Contactos";
+import { AVISO_TILDES, formatoTelefono, tieneTildes } from "./Contactos";
 
 type Respuesta = { status: number; cuerpo?: unknown };
 type Llamada = { metodo: string; ruta: string; q: string | null; headers: Record<string, string>; cuerpo: unknown };
@@ -98,7 +98,7 @@ describe("lista de contactos", () => {
       cuerpo: {
         total: 2,
         items: [
-          contacto(2, { first_name: "Luis", last_name: "Pérez", email: null, phone: "+12125550123", source: "walk_in" }),
+          contacto(2, { first_name: "Luis", last_name: "Perez", email: null, phone: "+12125550123", source: "walk_in" }),
           contacto(1),
         ],
       },
@@ -108,7 +108,7 @@ describe("lista de contactos", () => {
     const lista = await screen.findByRole("list");
     const filas = within(lista).getAllByRole("listitem");
     expect(filas.map((f) => f.textContent)).toEqual([
-      "Luis Pérez(212) 555-0123Nuevo · En persona",
+      "Luis Perez(212) 555-0123Nuevo · En persona",
       "Ana Smithana@clinica.example.comNuevo · Instagram",
     ]);
     expect(screen.getByText("2 contactos")).toBeTruthy();
@@ -164,14 +164,14 @@ describe("búsqueda", () => {
   it("busca al dejar de escribir, con una sola petición para toda la palabra", async () => {
     contactos = (q) =>
       q === "jose"
-        ? { status: 200, cuerpo: { total: 1, items: [contacto(7, { first_name: "José", last_name: "Pérez" })] } }
+        ? { status: 200, cuerpo: { total: 1, items: [contacto(7, { first_name: "Jose", last_name: "Perez" })] } }
         : { status: 200, cuerpo: { total: 0, items: [] } };
     const u = abrir();
     await screen.findByText(/Todavía no hay contactos/);
 
     await u.type(screen.getByLabelText("Buscar por nombre, apellidos, email o teléfono"), "jose");
 
-    expect(await screen.findByText("José Pérez")).toBeTruthy();
+    expect(await screen.findByText("Jose Perez")).toBeTruthy();
     expect(busquedas()).toEqual([null, "jose"]); // ni «j», ni «jo», ni «jos»
   });
 
@@ -297,6 +297,61 @@ describe("alta de contactos", () => {
 
     expect(screen.queryByLabelText("Nombre")).toBeNull();
     expect(llamadas.some((l) => l.metodo === "POST")).toBe(false);
+  });
+});
+
+describe("sin tildes (T12b)", () => {
+  it("el aviso sale bajo el campo mientras se escribe y desaparece al quitar la tilde", async () => {
+    const u = abrir();
+    await rellenar(u, { Nombre: "Jos\u00e9" });
+
+    const nombre = screen.getByLabelText("Nombre");
+    expect(nombre.getAttribute("aria-invalid")).toBe("true");
+    expect(document.getElementById(nombre.getAttribute("aria-describedby")!)!.textContent).toBe(AVISO_TILDES);
+
+    await u.clear(nombre);
+    await u.type(nombre, "Jose");
+    expect(nombre.getAttribute("aria-invalid")).toBeNull();
+    expect(screen.queryByText(AVISO_TILDES)).toBeNull();
+  });
+
+  it("tras pulsar Guardar con tilde, corregir el campo quita el aviso antes de volver a guardar", async () => {
+    const u = abrir();
+    await rellenar(u, { Nombre: "José", Apellidos: "Smith", Email: "jose@x.com", Origen: "google" });
+    await u.click(screen.getByRole("button", { name: "Guardar contacto" }));
+    expect(screen.getByText(AVISO_TILDES)).toBeTruthy();
+
+    await u.clear(screen.getByLabelText("Nombre"));
+    await u.type(screen.getByLabelText("Nombre"), "Jose");
+
+    expect(screen.queryByText(AVISO_TILDES)).toBeNull();
+    expect(screen.getByLabelText("Nombre").getAttribute("aria-invalid")).toBeNull();
+  });
+
+  it("con tildes en apellidos o email no se envía nada", async () => {
+    const u = abrir();
+    await rellenar(u, { Nombre: "Ana", Apellidos: "Mu\u00f1oz", Email: "jos\u00e9@x.com", Origen: "google" });
+
+    await u.click(screen.getByRole("button", { name: "Guardar contacto" }));
+
+    expect(screen.getAllByText(AVISO_TILDES)).toHaveLength(2);
+    expect(llamadas.some((l) => l.metodo === "POST")).toBe(false);
+  });
+
+  it("buscar con tilde muestra el aviso bajo el buscador", async () => {
+    const u = abrir();
+    await screen.findByText(/Todavía no hay contactos/);
+    const buscador = screen.getByLabelText("Buscar por nombre, apellidos, email o teléfono");
+
+    await u.type(buscador, "Jos\u00e9");
+
+    expect(await screen.findByText("No hay contactos que coincidan con «Jos\u00e9».")).toBeTruthy();
+    expect(document.getElementById(buscador.getAttribute("aria-describedby")!)!.textContent).toBe(AVISO_TILDES);
+  });
+
+  it("tieneTildes detecta cualquier carácter fuera de ASCII", () => {
+    expect(tieneTildes("O'Connor-Smith Jr.")).toBe(false);
+    expect(["Jos\u00e9", "Mu\u00f1oz", "Zo\u00eb", "\u0410na", "Ana\u200bMaria"].map(tieneTildes)).toEqual([true, true, true, true, true]);
   });
 });
 

@@ -1,4 +1,4 @@
-"""Validación propia de nombres, emails y teléfonos (T11), sin BD."""
+"""Validación propia de nombres, emails y teléfonos (T11; sin tildes desde T12b), sin BD."""
 
 import pytest
 
@@ -11,28 +11,45 @@ from app.validators import normalize_contact_email, normalize_name, normalize_ph
     "entrada, esperado",
     [
         ("Ana", "Ana"),
-        ("  Ana   María  ", "Ana María"),
-        ("María\tJosé", "María José"),
+        ("  Ana   Maria  ", "Ana Maria"),
+        ("Maria\tJose", "Maria Jose"),
         ("O'Connor-Smith", "O'Connor-Smith"),
-        ("Ana María", "Ana María"),  # espacio no separable → espacio normal
-        ("José", "José"),  # «e» + tilde suelta → «é» de un solo carácter (NFC)
+        ("Mary-Jane", "Mary-Jane"),
+        ("John Jr.", "John Jr."),
+        ("St. John", "St. John"),
+        ("Ana\u00a0Maria", "Ana Maria"),  # espacio no separable (p. ej., pegado) → espacio normal
     ],
 )
 def test_nombres_validos_se_normalizan(entrada, esperado):
     assert normalize_name(entrada, "nombre") == esperado
 
 
-def test_email_con_tilde_suelta_se_une_en_un_caracter():
-    assert normalize_contact_email("josé@clinica.com") == "josé@clinica.com"
+@pytest.mark.parametrize(
+    "entrada",
+    ["José", "Jose\u0301", "Muñoz", "Zoë", "\u0410na", "Ana\u200bMaria", "Ana\u202eMaria", "Ana \U0001f600"],
+    ids=["tilde", "tilde suelta", "eñe", "diéresis", "A cirílica", "ancho cero", "cambio de dirección", "emoji"],
+)
+def test_nombres_con_tildes_o_caracteres_especiales_se_rechazan_con_el_aviso(entrada):
+    with pytest.raises(ValueError, match=r"^No se permiten tildes ni caracteres especiales \(á, ñ, ü…\)$"):
+        normalize_name(entrada, "nombre")
 
 
 @pytest.mark.parametrize(
-    "entrada",
-    ["", "   ", "Ana​María", "Ana‮María", "Ana\x00", "A" * 101],
-    ids=["vacío", "solo espacios", "ancho cero", "cambio de dirección", "control", "101 caracteres"],
+    "entrada, mensaje",
+    [
+        ("", "El nombre no puede estar vacío"),
+        ("   ", "El nombre no puede estar vacío"),
+        ("A" * 101, "El nombre no puede tener más de 100 caracteres"),
+        ("Ana\x00", "El nombre solo puede tener letras"),
+        ("Ana2", "El nombre solo puede tener letras"),
+        ("Ana@", "El nombre solo puede tener letras"),
+        ("-Ana", "El nombre solo puede tener letras"),
+        (".", "El nombre solo puede tener letras"),
+    ],
+    ids=["vacío", "solo espacios", "101 caracteres", "control", "cifra", "arroba", "guion inicial", "solo un punto"],
 )
-def test_nombres_no_validos(entrada):
-    with pytest.raises(ValueError):
+def test_nombres_no_validos(entrada, mensaje):
+    with pytest.raises(ValueError, match=f"^{mensaje}"):
         normalize_name(entrada, "nombre")
 
 
@@ -64,18 +81,20 @@ def test_emails_validos_se_normalizan(entrada, esperado):
         "ana@clinica.c",
         "ana@clinica.c0m",
         "ana @clinica.com",
-        "ana​@clinica.com",
+        "ana\u200b@clinica.com",
         "ana@-clinica.com",
         "ana@clinica-.com",
         "ana@clinica..com",
         "ana@josé.com",
+        "josé@clinica.com",
+        "ana\x7f@clinica.com",
         "a" * 65 + "@x.com",
         "a" * 64 + "@" + "b" * 63 + "." + "c" * 63 + "." + "d" * 63 + ".com",
     ],
     ids=[
         "sin arroba", "sin dominio", "sin usuario", "dos arrobas", "sin punto", "terminación de 1 letra",
         "terminación con cifra", "espacio", "ancho cero", "guion inicial", "guion final", "punto doble",
-        "dominio con tilde (límite asumido)", "usuario de 65", "más de 254",
+        "dominio con tilde", "usuario con tilde", "carácter de control DEL", "usuario de 65", "más de 254",
     ],
 )
 def test_emails_no_validos(entrada):
@@ -126,3 +145,8 @@ def test_telefonos_validos_en_e164(entrada, esperado):
 def test_telefonos_no_validos(entrada):
     with pytest.raises(ValueError):
         normalize_phone(entrada)
+
+
+def test_email_con_tilde_da_el_aviso_de_tildes():
+    with pytest.raises(ValueError, match=r"^No se permiten tildes"):
+        normalize_contact_email("josé@clinica.com")

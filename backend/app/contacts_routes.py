@@ -115,15 +115,16 @@ class ContactList(BaseModel):
 def _search_condition(q: str) -> ColumnElement[bool]:
     """Coincidencia parcial en nombre y apellidos (en cualquier orden), email o teléfono.
 
-    Sin distinguir mayúsculas ni tildes (unaccent, migración dc66ba7eb339). El texto va como
-    parámetro, nunca pegado al SQL; % y _ se escapan para que se busquen literalmente.
+    Sin distinguir mayúsculas (ILIKE). Los datos no llevan tildes (T12b): una búsqueda con
+    tilde no encuentra nada y la interfaz avisa. El texto va como parámetro, nunca pegado
+    al SQL; % y _ se escapan para que se busquen literalmente.
     """
     escaped = re.sub(r"([\\%_])", r"\\\1", q)
-    pattern = func.unaccent(f"%{escaped}%")
+    pattern = f"%{escaped}%"
     conditions = [
-        func.unaccent(Contact.first_name + " " + Contact.last_name).ilike(pattern, escape="\\"),
-        func.unaccent(Contact.last_name + " " + Contact.first_name).ilike(pattern, escape="\\"),
-        func.unaccent(Contact.email).ilike(pattern, escape="\\"),
+        (Contact.first_name + " " + Contact.last_name).ilike(pattern, escape="\\"),
+        (Contact.last_name + " " + Contact.first_name).ilike(pattern, escape="\\"),
+        Contact.email.ilike(pattern, escape="\\"),
     ]
     # Teléfono: solo las cifras, para que «(212) 555» encuentre +12125550123.
     digits = "".join(c for c in q if c.isascii() and c.isdigit())
@@ -138,7 +139,7 @@ def list_contacts(
     db: Session = Depends(get_db),
     q: Annotated[str, Query(max_length=MAX_SEARCH_LENGTH)] = "",
 ) -> ContactList:
-    # Espacios de más fuera, como al guardar. La tilde suelta («e» + tilde) ya la quita unaccent.
+    # Espacios de más fuera, como al guardar.
     q = " ".join(q.split())
     query = select(Contact)
     if q:

@@ -1,4 +1,4 @@
-"""Alta de contactos contra PostgreSQL real (T11, ver conftest.py)."""
+"""Contactos contra PostgreSQL real: alta (T11), lista y búsqueda (T12), sin tildes (T12b)."""
 
 import pytest
 from fastapi.testclient import TestClient
@@ -111,7 +111,8 @@ def test_basta_con_el_telefono(usuarios, db):
         ({"email": "ana@clinica"}, "El dominio del email no es válido (por ejemplo: nombre@clinica.com)"),
         ({"phone": "(123) 555-0123"}, "El teléfono de EE. UU. no es válido (p. ej. (212) 555-0123)"),
         ({"first_name": "   "}, "El nombre no puede estar vacío"),
-        ({"last_name": "Smi​th"}, "El apellido contiene caracteres no permitidos"),
+        ({"last_name": "Smi\u200bth"}, "No se permiten tildes ni caracteres especiales (á, ñ, ü…)"),
+        ({"last_name": "Smith2"}, "El apellido solo puede tener letras, espacios, guiones, apóstrofos y puntos, y empezar por letra"),
     ],
 )
 def test_datos_no_validos_422_con_mensaje_claro(usuarios, db, cambio, mensaje):
@@ -155,16 +156,17 @@ def test_mismo_nombre_y_telefono_409(usuarios, db):
     assert response.json() == {"detail": "Ya existe un contacto con ese nombre, apellidos y teléfono"}
 
 
-def test_mismo_nombre_con_la_tilde_escrita_de_otra_forma_409(usuarios, db):
-    base = {"first_name": "José", "last_name": "Pérez", "email": "jose@clinica.example.com", "source": "google"}
-    assert crear(base).status_code == 201
+@pytest.mark.parametrize(
+    "cambio",
+    [{"first_name": "Jos\u00e9"}, {"last_name": "Mu\u00f1oz"}, {"email": "jos\u00e9@clinica.example.com"}],
+    ids=["nombre con tilde", "apellido con eñe", "email con tilde"],
+)
+def test_con_tildes_422_con_el_aviso_y_no_se_guarda(usuarios, db, cambio):
+    response = crear({**ANA, **cambio})
 
-    # Se ve igual, pero llega como «e» + tilde suelta (p. ej., pegado desde otra aplicación).
-    response = crear({**base, "first_name": "José", "last_name": "Pérez"})
-
-    assert response.status_code == 409
-    assert contar(db) == 1
-    assert db.scalar(select(Contact.first_name)) == "José"
+    assert response.status_code == 422
+    assert "No se permiten tildes ni caracteres especiales (á, ñ, ü…)" in mensajes(response)
+    assert contar(db) == 0
 
 
 def test_una_familia_puede_compartir_email_y_telefono(usuarios, db):
@@ -193,13 +195,18 @@ def test_tras_un_409_se_puede_seguir_creando(usuarios, db):
         ("first_name, last_name, email, source", "'Ana', 'Smith', 'Ana@X.com', 'google'"),
         ("first_name, last_name, phone, source", "'Ana', 'Smith', '2125550123', 'google'"),
         ("first_name, last_name, email, source", "' Ana', 'Smith', 'a@x.com', 'google'"),
-        ("first_name, last_name, email, source", "'Ana  María', 'Smith', 'a@x.com', 'google'"),
+        ("first_name, last_name, email, source", "'Ana  Maria', 'Smith', 'a@x.com', 'google'"),
         ("first_name, last_name, email, source", "'', 'Smith', 'a@x.com', 'google'"),
         ("first_name, last_name, email, source", "'Ana', 'Smith', 'a@x.com', 'tiktok'"),
         ("first_name, last_name, email, source, status", "'Ana', 'Smith', 'a@x.com', 'google', 'vip'"),
+        ("first_name, last_name, email, source", "'Jos\u00e9', 'Smith', 'a@x.com', 'google'"),
+        ("first_name, last_name, email, source", "'Ana', 'Mu\u00f1oz', 'a@x.com', 'google'"),
+        ("first_name, last_name, email, source", "'Ana', 'Smith', 'jos\u00e9@x.com', 'google'"),
+        ("first_name, last_name, email, source", "'Ana2', 'Smith', 'a@x.com', 'google'"),
     ],
     ids=["sin contacto", "email sin normalizar", "teléfono sin +", "espacio inicial", "espacio doble",
-         "nombre vacío", "origen inválido", "estado inválido"],
+         "nombre vacío", "origen inválido", "estado inválido", "nombre con tilde", "apellido con eñe",
+         "email con tilde", "nombre con cifra"],
 )
 def test_la_bd_rechaza_datos_que_salten_la_api(db, columnas, valores):
     with pytest.raises(IntegrityError), db.begin_nested():
@@ -242,7 +249,7 @@ def listar(q: str | None = None, role: Role = Role.RECEPTION):
 
 @pytest.mark.parametrize("role", [Role.RECEPTION, Role.ADMIN])
 def test_recepcion_y_admin_ven_la_lista_del_mas_reciente_al_mas_antiguo(usuarios, db, role):
-    ids = guardar(db, ("Ana", "Smith", "ana@x.com", None), ("Luis", "Pérez", None, "+12125550123"))
+    ids = guardar(db, ("Ana", "Smith", "ana@x.com", None), ("Luis", "Perez", None, "+12125550123"))
 
     response = listar(role=role)
 
@@ -264,7 +271,7 @@ def test_profesional_y_cliente_no_ven_la_lista(usuarios, db, role):
 
 
 def test_la_lista_trae_20_y_el_total_real(usuarios, db):
-    ids = guardar(db, *[(f"Ana{i}", "Smith", f"a{i}@x.com", None) for i in range(25)])
+    ids = guardar(db, *[(f"Ana{chr(65 + i)}", "Smith", f"a{i}@x.com", None) for i in range(25)])
 
     datos = listar().json()
 
@@ -273,7 +280,7 @@ def test_la_lista_trae_20_y_el_total_real(usuarios, db):
 
 
 def test_el_total_cuenta_todos_los_que_cumplen_la_busqueda(usuarios, db):
-    guardar(db, *[(f"Ana{i}", "Smith", f"a{i}@x.com", None) for i in range(22)], ("Luis", "Pérez", "l@x.com", None))
+    guardar(db, *[(f"Ana{chr(65 + i)}", "Smith", f"a{i}@x.com", None) for i in range(22)], ("Luis", "Perez", "l@x.com", None))
 
     datos = listar("ana").json()
 
@@ -283,12 +290,12 @@ def test_el_total_cuenta_todos_los_que_cumplen_la_busqueda(usuarios, db):
 
 @pytest.mark.parametrize(
     "q",
-    ["jose", "JOSÉ", "José", "perez", "José Pérez", "  perez   jose ", "jose.p@clin", "(212) 555-01", "+1 212", "5550123"],
-    ids=["sin tilde", "mayúsculas", "tilde suelta", "apellido", "nombre completo", "al revés y con espacios",
+    ["jose", "JOSE", "perez", "Jose Perez", "  perez   jose ", "jose.p@clin", "(212) 555-01", "+1 212", "5550123"],
+    ids=["nombre", "mayúsculas", "apellido", "nombre completo", "al revés y con espacios",
          "parte del email", "teléfono con formato", "teléfono con prefijo", "final del teléfono"],
 )
 def test_la_busqueda_encuentra_por_nombre_email_o_telefono(usuarios, db, q):
-    jose, _ = guardar(db, ("José", "Pérez", "jose.p@clinica.example.com", "+12125550123"), ("Ana", "Smith", "ana@x.com", "+34612345678"))
+    jose, _ = guardar(db, ("Jose", "Perez", "jose.p@clinica.example.com", "+12125550123"), ("Ana", "Smith", "ana@x.com", "+34612345678"))
 
     datos = listar(q).json()
 
@@ -298,11 +305,11 @@ def test_la_busqueda_encuentra_por_nombre_email_o_telefono(usuarios, db, q):
 
 @pytest.mark.parametrize(
     "q",
-    ["%", "_", "\\", "nadie", "21"],
-    ids=["% literal", "_ literal", "barra invertida", "sin coincidencias", "menos de 3 cifras"],
+    ["%", "_", "\\", "nadie", "21", "Jos\u00e9"],
+    ids=["% literal", "_ literal", "barra invertida", "sin coincidencias", "menos de 3 cifras", "con tilde"],
 )
 def test_la_busqueda_no_devuelve_de_mas(usuarios, db, q):
-    guardar(db, ("José", "Pérez", "jose@x.com", "+12125550123"), ("Ana", "Smith", "ana@x.com", None))
+    guardar(db, ("Jose", "Perez", "jose@x.com", "+12125550123"), ("Ana", "Smith", "ana@x.com", None))
 
     datos = listar(q).json()
 
@@ -310,7 +317,7 @@ def test_la_busqueda_no_devuelve_de_mas(usuarios, db, q):
 
 
 def test_busqueda_vacia_o_solo_espacios_devuelve_todos(usuarios, db):
-    guardar(db, ("José", "Pérez", "jose@x.com", None), ("Ana", "Smith", "ana@x.com", None))
+    guardar(db, ("Jose", "Perez", "jose@x.com", None), ("Ana", "Smith", "ana@x.com", None))
 
     assert listar("   ").json()["total"] == 2
 
@@ -321,7 +328,7 @@ def test_busqueda_demasiado_larga_422(usuarios, db):
 
 
 def test_lo_creado_por_la_api_aparece_el_primero_en_la_lista(usuarios, db):
-    guardar(db, ("Luis", "Pérez", "l@x.com", None))
+    guardar(db, ("Luis", "Perez", "l@x.com", None))
     creado = crear(ANA).json()
 
     assert listar().json()["items"][0] == creado

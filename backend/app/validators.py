@@ -2,62 +2,57 @@
 
 Cada función devuelve el valor ya normalizado (el que se guarda) o lanza ValueError con
 un mensaje para el usuario. La BD repite las reglas básicas con restricciones CHECK.
+
+Sin tildes (decisión T12b): el MVP es para clínicas de EE. UU.; nombres y emails solo
+admiten caracteres ASCII. Una lista cerrada de caracteres permitidos deja fuera también,
+sin reglas aparte, los invisibles, los de control y las letras que imitan a otras
+(«А» cirílica). Si hiciera falta admitir tildes, sería una versión posterior.
 """
 
 import re
-import unicodedata
 
 MAX_EMAIL_LENGTH = 254
 MAX_LOCAL_PART_LENGTH = 64
 MAX_NAME_LENGTH = 100
 
+NO_ACCENTS_MESSAGE = "No se permiten tildes ni caracteres especiales (á, ñ, ü…)"
+
+# Nombre o apellidos: empieza por letra; después letras, espacio, guion, apóstrofo o punto
+# (Mary-Jane, O'Connor, Jr.). La BD repite esta misma expresión (ck_contacts_*_ascii).
+_NAME = re.compile(r"^[A-Za-z][A-Za-z '.-]*$")
+# Email: caracteres ASCII visibles, sin espacios (de «!» a «~»).
+_EMAIL_CHARS = re.compile(r"^[!-~]+$")
 # Parte de dominio: letras, cifras y guiones, sin guion al principio ni al final.
 _DOMAIN_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _TLD = re.compile(r"^[a-z]{2,63}$")
 _PHONE_SEPARATORS = re.compile(r"[\s().\-]")
 
 
-def _has_hidden_characters(value: str, allow_space: bool) -> bool:
-    """Caracteres de control o invisibles (categorías Unicode C*) y espacios (Z*) salvo ' '.
-
-    Por categoría y no con una lista a mano: cubre el espacio de ancho cero, las marcas
-    de dirección del texto, los saltos de línea, el espacio no separable, etc.
-    """
-    for char in value:
-        category = unicodedata.category(char)
-        if category.startswith("C"):
-            return True
-        if category.startswith("Z") and not (allow_space and char == " "):
-            return True
-    return False
-
-
 def normalize_name(value: str, field: str) -> str:
-    """Nombre o apellidos: sin espacios en los extremos ni repetidos; no vacío; sin invisibles.
-
-    En forma NFC: «é» puede llegar como un carácter o como «e» + tilde; sin unificarlo,
-    «José» y «José» serían nombres distintos y el índice de duplicados no los vería.
-    """
-    name = " ".join(unicodedata.normalize("NFC", value).split())
+    """Nombre o apellidos: sin espacios en los extremos ni repetidos; no vacío; sin tildes."""
+    name = " ".join(value.split())
     if not name:
         raise ValueError(f"El {field} no puede estar vacío")
     if len(name) > MAX_NAME_LENGTH:
         raise ValueError(f"El {field} no puede tener más de {MAX_NAME_LENGTH} caracteres")
-    if _has_hidden_characters(name, allow_space=True):
-        raise ValueError(f"El {field} contiene caracteres no permitidos")
+    if not name.isascii():
+        raise ValueError(NO_ACCENTS_MESSAGE)
+    if not _NAME.match(name):
+        raise ValueError(f"El {field} solo puede tener letras, espacios, guiones, apóstrofos y puntos, y empezar por letra")
     return name
 
 
 def normalize_contact_email(value: str) -> str:
-    """Email en minúsculas y sin espacios en los extremos, con un formato razonable.
+    """Email en minúsculas y sin espacios en los extremos, con un formato razonable y sin tildes.
 
-    Límite asumido (T11): no se aceptan dominios con tildes (josé.com). No comprueba
-    que el buzón exista: eso solo se sabe enviando un correo.
+    No comprueba que el buzón exista: eso solo se sabe enviando un correo.
     """
-    email = unicodedata.normalize("NFC", value).strip().lower()
+    email = value.strip().lower()
     if len(email) > MAX_EMAIL_LENGTH:
         raise ValueError(f"El email no puede tener más de {MAX_EMAIL_LENGTH} caracteres")
-    if _has_hidden_characters(email, allow_space=False):
+    if not email.isascii():
+        raise ValueError(NO_ACCENTS_MESSAGE)
+    if not _EMAIL_CHARS.match(email):
         raise ValueError("El email contiene espacios o caracteres no permitidos")
     if email.count("@") != 1:
         raise ValueError("El email debe tener una sola @")
