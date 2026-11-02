@@ -1,4 +1,4 @@
-"""Contactos contra PostgreSQL real: alta (T11), lista y búsqueda (T12), sin tildes (T12b), ficha y edición (T13)."""
+"""Contactos contra PostgreSQL real: alta (T11), lista y búsqueda (T12), sin tildes (T12b), ficha y edición (T13), estado y responsable (T14)."""
 
 import pytest
 from fastapi.testclient import TestClient
@@ -58,9 +58,10 @@ def test_recepcion_y_admin_crean_un_contacto(usuarios, db, role):
     assert datos | {"id": 0, "created_at": ""} == {
         "id": 0, "first_name": "Ana", "last_name": "Smith", "email": "ana@clinica.example.com",
         "phone": "+12125550123", "source": "instagram", "status": "new", "created_at": "",
+        "owner_id": usuarios[role].id, "owner_email": f"{role.value}@prueba.example.com",  # responsable: quien lo crea (T14)
     }
     contacto = db.get(Contact, datos["id"])
-    assert contacto.created_by_id == usuarios[role].id
+    assert contacto.created_by_id == contacto.owner_id == usuarios[role].id
     assert contacto.status == "new"
 
 
@@ -228,7 +229,7 @@ def test_borrar_al_autor_conserva_el_contacto(usuarios, db):
     db.expire_all()
 
     contacto = db.get(Contact, contacto_id)
-    assert contacto is not None and contacto.created_by_id is None
+    assert contacto is not None and contacto.created_by_id is None and contacto.owner_id is None
 
 
 # --- Lista y búsqueda (T12) ----------------------------------------------------------
@@ -242,9 +243,10 @@ def guardar(db, *contactos: tuple[str, str, str | None, str | None]) -> list[int
     return [f.id for f in filas]
 
 
-def listar(q: str | None = None, role: Role = Role.RECEPTION):
+def listar(q: str | None = None, role: Role = Role.RECEPTION, **filtros):
     client, _ = sesion_de(role)
-    return client.get("/api/contacts", params=None if q is None else {"q": q})
+    params = ({} if q is None else {"q": q}) | filtros
+    return client.get("/api/contacts", params=params or None)
 
 
 @pytest.mark.parametrize("role", [Role.RECEPTION, Role.ADMIN])
@@ -257,7 +259,9 @@ def test_recepcion_y_admin_ven_la_lista_del_mas_reciente_al_mas_antiguo(usuarios
     datos = response.json()
     assert datos["total"] == 2
     assert [c["id"] for c in datos["items"]] == ids[::-1]
-    assert set(datos["items"][0]) == {"id", "first_name", "last_name", "email", "phone", "source", "status", "created_at"}
+    assert set(datos["items"][0]) == {
+        "id", "first_name", "last_name", "email", "phone", "source", "status", "created_at", "owner_id", "owner_email",
+    }
 
 
 @pytest.mark.parametrize("role", [Role.PROFESSIONAL, Role.CLIENT])
@@ -350,8 +354,11 @@ def editar(contact_id: int, datos: dict, role: Role = Role.RECEPTION):
 
 
 def ficha_de_ana(**cambios) -> dict:
-    """Lo que enviaría el formulario de edición: la ficha entera y la versión leída."""
-    return {**ANA, "phone": None, "version": 1, **cambios}
+    """Lo que enviaría el formulario de edición: la ficha entera y la versión leída.
+
+    Sin responsable salvo que se indique (`owner_id`): es lo único que no sabe sin la BD.
+    """
+    return {**ANA, "phone": None, "owner_id": None, "version": 1, **cambios}
 
 
 @pytest.mark.parametrize("role", [Role.RECEPTION, Role.ADMIN])
@@ -476,3 +483,259 @@ def test_la_bd_rechaza_una_version_menor_que_1(db):
 
     with pytest.raises(IntegrityError, match="ck_contacts_version_positive"), db.begin_nested():
         db.execute(text("UPDATE contacts SET version = 0"))
+
+
+# --- Estado comercial y responsable (T14) -------------------------------------------------
+
+
+def cambiar_estado(contact_id: int, estado: str, version: int = 1, role: Role = Role.RECEPTION):
+    client, csrf = sesion_de(role)
+    return client.put(f"/api/contacts/{contact_id}/status", json={"status": estado, "version": version}, headers=csrf)
+
+
+def en_estado(db, estado: str, nombre: str = "Ana") -> int:
+    """Crea el contacto por la API y lo deja en ese estado directamente en la BD (las citas aún no existen)."""
+    contacto_id = crear({**ANA, "first_name": nombre}).json()["id"]
+    db.execute(text("UPDATE contacts SET status = :s WHERE id = :id"), {"s": estado, "id": contacto_id})
+    return contacto_id
+
+
+def recargar(db, contact_id: int) -> Contact:
+    return db.get(Contact, contact_id, populate_existing=True)
+
+
+@pytest.mark.parametrize(
+    "origen, destino",
+    [
+        ("new", "contacted"),
+        ("new", "lost"),
+        ("contacted", "lost"),
+        ("scheduled", "lost"),
+        ("client", "lost"),
+        ("lost", "contacted"),
+    ],
+    ids=["avanzar", "perder un nuevo", "perder un contactado", "perder con cita", "perder un cliente", "reabrir"],
+)
+@pytest.mark.parametrize("role", [Role.RECEPTION, Role.ADMIN])
+def test_cambios_de_estado_permitidos(usuarios, db, origen, destino, role):
+    contacto_id = en_estado(db, origen)
+
+    response = cambiar_estado(contacto_id, destino, role=role)
+
+    assert response.status_code == 200
+    datos = response.json()
+    assert (datos["id"], datos["status"], datos["version"]) == (contacto_id, destino, 2)  # la misma ficha
+    assert datos["updated_by_email"] == f"{role.value}@prueba.example.com"
+    assert listar().json()["total"] == 1
+
+
+@pytest.mark.parametrize(
+    "origen, destino, mensaje",
+    [
+        ("contacted", "contacted", "No se puede pasar de «Contactado» a «Contactado»"),
+        ("lost", "lost", "No se puede pasar de «Perdido» a «Perdido»"),
+        ("scheduled", "contacted", "No se puede pasar de «Cita agendada» a «Contactado»"),
+        ("client", "contacted", "No se puede pasar de «Cliente» a «Contactado»"),
+        ("contacted", "new", "Un contacto no vuelve a «Nuevo»"),
+        ("lost", "new", "Un contacto no vuelve a «Nuevo»"),
+        ("contacted", "scheduled", "«Cita agendada» no se pone a mano: lo pondrán las citas"),
+        ("new", "client", "«Cliente» no se pone a mano: lo pondrán las citas"),
+    ],
+    ids=["repetir", "perder dos veces", "retroceder", "cliente atras", "volver a nuevo", "reabrir como nuevo",
+         "cita a mano", "cliente a mano"],
+)
+def test_cambios_de_estado_no_permitidos_422_y_no_cambia_nada(usuarios, db, origen, destino, mensaje):
+    contacto_id = en_estado(db, origen)
+
+    response = cambiar_estado(contacto_id, destino)
+
+    assert response.status_code == 422
+    assert mensajes(response) == [mensaje]
+    assert response.json()["detail"][0]["loc"] == ["body", "status"]
+    contacto = recargar(db, contacto_id)
+    assert (contacto.status, contacto.version, contacto.updated_by_id) == (origen, 1, None)
+
+
+def test_cambio_de_estado_con_version_antigua_409(usuarios, db):
+    contacto_id = crear(ANA).json()["id"]
+    assert cambiar_estado(contacto_id, "contacted").status_code == 200
+
+    response = cambiar_estado(contacto_id, "lost", version=1, role=Role.ADMIN)  # leyó la versión 1
+
+    assert response.status_code == 409
+    assert response.json() == VERSION_CONFLICT
+    contacto = recargar(db, contacto_id)
+    assert (contacto.status, contacto.version) == ("contacted", 2)
+
+
+def test_estado_y_edicion_comparten_la_version(usuarios, db):
+    contacto_id = crear(ANA).json()["id"]
+    assert cambiar_estado(contacto_id, "contacted").status_code == 200
+
+    # Quien abrió la ficha antes del cambio de estado no lo pisa al guardar.
+    assert editar(contacto_id, ficha_de_ana(first_name="Anna")).status_code == 409
+    # Y al revés: una edición deja antigua la versión con la que se iba a cambiar el estado.
+    assert editar(contacto_id, ficha_de_ana(first_name="Anna", version=2)).status_code == 200
+    assert cambiar_estado(contacto_id, "lost", version=2).status_code == 409
+    contacto = recargar(db, contacto_id)
+    assert (contacto.first_name, contacto.status, contacto.version) == ("Anna", "contacted", 3)
+
+
+def test_editar_la_ficha_no_cambia_el_estado(usuarios, db):
+    contacto_id = en_estado(db, "lost")
+
+    assert editar(contacto_id, ficha_de_ana(first_name="Anna")).json()["status"] == "lost"
+
+
+@pytest.mark.parametrize("role", [Role.PROFESSIONAL, Role.CLIENT])
+def test_profesional_y_cliente_no_cambian_el_estado(usuarios, db, role):
+    contacto_id = crear(ANA).json()["id"]
+
+    assert cambiar_estado(contacto_id, "contacted", role=role).status_code == 403
+    assert recargar(db, contacto_id).status == "new"
+
+
+def test_cambiar_estado_sin_csrf_403_y_de_uno_que_no_existe_404(usuarios, db):
+    contacto_id = crear(ANA).json()["id"]
+    client, _ = sesion_de(Role.RECEPTION)
+
+    assert client.put(f"/api/contacts/{contacto_id}/status", json={"status": "contacted", "version": 1}).status_code == 403
+    assert recargar(db, contacto_id).status == "new"
+    assert cambiar_estado(999999, "contacted").status_code == 404
+
+
+@pytest.mark.parametrize(
+    "cuerpo",
+    [{"status": "ganado", "version": 1}, {"status": "contacted"}, {"status": "contacted", "version": 1, "owner_id": 1}],
+    ids=["estado inexistente", "sin version", "campo de mas"],
+)
+def test_cambio_de_estado_mal_formado_422(usuarios, db, cuerpo):
+    contacto_id = crear(ANA).json()["id"]
+    client, csrf = sesion_de(Role.RECEPTION)
+
+    assert client.put(f"/api/contacts/{contacto_id}/status", json=cuerpo, headers=csrf).status_code == 422
+    assert recargar(db, contacto_id).version == 1
+
+
+# Responsable
+
+
+def cuenta_de_baja(db, role: Role = Role.RECEPTION) -> User:
+    user = User(email="baja@prueba.example.com", password_hash=hash_password(PASSWORD), role=role, active=False)
+    db.add(user)
+    db.flush()
+    return user
+
+
+def test_posibles_responsables_solo_recepcion_y_admin_activos(usuarios, db):
+    cuenta_de_baja(db)
+    client, _ = sesion_de(Role.RECEPTION)
+
+    response = client.get("/api/contacts/owners")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {"id": usuarios[Role.ADMIN].id, "email": "admin@prueba.example.com"},
+        {"id": usuarios[Role.RECEPTION].id, "email": "reception@prueba.example.com"},
+    ]
+
+
+@pytest.mark.parametrize("role", [Role.PROFESSIONAL, Role.CLIENT])
+def test_profesional_y_cliente_no_ven_los_responsables(usuarios, db, role):
+    client, _ = sesion_de(role)
+
+    assert client.get("/api/contacts/owners").status_code == 403
+
+
+def test_reasignar_el_responsable_y_dejarlo_sin_responsable(usuarios, db):
+    contacto_id = crear(ANA).json()["id"]
+    admin = usuarios[Role.ADMIN]
+
+    reasignado = editar(contacto_id, ficha_de_ana(owner_id=admin.id)).json()
+    assert (reasignado["owner_id"], reasignado["owner_email"]) == (admin.id, "admin@prueba.example.com")
+    assert listar().json()["items"][0]["owner_email"] == "admin@prueba.example.com"
+
+    sin_responsable = editar(contacto_id, ficha_de_ana(owner_id=None, version=2)).json()
+    assert (sin_responsable["owner_id"], sin_responsable["owner_email"]) == (None, None)
+
+
+@pytest.mark.parametrize("quien", ["profesional", "cliente", "de baja", "inexistente"])
+def test_responsable_no_valido_422_y_no_cambia_nada(usuarios, db, quien):
+    baja = cuenta_de_baja(db, Role.ADMIN)
+    owner_id = {
+        "profesional": usuarios[Role.PROFESSIONAL].id,
+        "cliente": usuarios[Role.CLIENT].id,
+        "de baja": baja.id,
+        "inexistente": 999999,
+    }[quien]
+    contacto_id = crear(ANA).json()["id"]
+
+    response = editar(contacto_id, ficha_de_ana(owner_id=owner_id))
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == [
+        {"type": "dato_no_valido", "loc": ["body", "owner_id"],
+         "msg": "El responsable debe ser una cuenta activa de recepción o administración"},
+    ]
+    contacto = recargar(db, contacto_id)
+    assert (contacto.owner_id, contacto.version) == (usuarios[Role.RECEPTION].id, 1)
+
+
+def test_guardar_sin_tocar_un_responsable_dado_de_baja_no_falla(usuarios, db):
+    contacto_id = crear(ANA).json()["id"]
+    recepcion = usuarios[Role.RECEPTION]
+    recepcion.active = False
+    db.flush()
+
+    response = editar(contacto_id, ficha_de_ana(first_name="Anna", owner_id=recepcion.id), Role.ADMIN)
+
+    assert response.status_code == 200
+    assert response.json()["owner_id"] == recepcion.id
+
+
+def test_editar_sin_indicar_el_responsable_422(usuarios, db):
+    contacto_id = crear(ANA).json()["id"]
+    ficha = ficha_de_ana()
+    del ficha["owner_id"]  # PUT es la ficha entera: no darlo no significa «sin responsable»
+
+    assert editar(contacto_id, ficha).status_code == 422
+    assert recargar(db, contacto_id).owner_id == usuarios[Role.RECEPTION].id
+
+
+# Filtros de la lista
+
+
+def test_filtrar_por_un_estado_o_varios(usuarios, db):
+    ids = {estado: en_estado(db, estado, nombre) for estado, nombre in [("new", "Ana"), ("contacted", "Eva"), ("lost", "Luz")]}
+
+    perdidos = listar(status="lost").json()
+    activos = listar(status=["new", "contacted", "scheduled", "client"]).json()
+
+    assert [c["id"] for c in perdidos["items"]] == [ids["lost"]] and perdidos["total"] == 1
+    assert {c["id"] for c in activos["items"]} == {ids["new"], ids["contacted"]} and activos["total"] == 2
+    assert listar().json()["total"] == 3  # sin filtro, todos
+
+
+def test_filtrar_por_responsable_mios_y_sin_asignar(usuarios, db):
+    mio = crear(ANA).json()["id"]
+    de_admin = crear({**ANA, "first_name": "Eva"}, Role.ADMIN).json()["id"]
+    sin_nadie = crear({**ANA, "first_name": "Luz"}).json()["id"]
+    assert editar(sin_nadie, ficha_de_ana(first_name="Luz", owner_id=None)).status_code == 200
+
+    assert [c["id"] for c in listar(owner="me").json()["items"]] == [mio]
+    assert [c["id"] for c in listar(owner="me", role=Role.ADMIN).json()["items"]] == [de_admin]
+    assert [c["id"] for c in listar(owner="none").json()["items"]] == [sin_nadie]
+
+
+def test_los_filtros_se_combinan_con_la_busqueda(usuarios, db):
+    ana = crear(ANA).json()["id"]
+    crear({**ANA, "first_name": "Eva"})
+    assert cambiar_estado(ana, "contacted").status_code == 200
+
+    assert [c["id"] for c in listar("ana", status="contacted", owner="me").json()["items"]] == [ana]
+    assert listar("eva", status="contacted").json() == {"total": 0, "items": []}
+
+
+@pytest.mark.parametrize("filtro", [{"status": "ganado"}, {"owner": "otro"}, {"owner": "1"}])
+def test_filtro_no_valido_422(usuarios, db, filtro):
+    assert listar(**filtro).status_code == 422

@@ -11,7 +11,14 @@ import type { Contacto } from "./api";
 import { AVISO_TILDES, formatoTelefono, tieneTildes } from "./Contactos";
 
 type Respuesta = { status: number; cuerpo?: unknown };
-type Llamada = { metodo: string; ruta: string; q: string | null; headers: Record<string, string>; cuerpo: unknown };
+type Llamada = {
+  metodo: string;
+  ruta: string;
+  q: string | null;
+  consulta: string; // todos los parámetros (?q=…&status=…), para los filtros (T14)
+  headers: Record<string, string>;
+  cuerpo: unknown;
+};
 
 const RECEPCION = { id: 2, email: "recepcion@prueba.example.com", role: "reception", csrf_token: "csrf-recepcion" };
 const ADMIN = { id: 1, email: "admin@prueba.example.com", role: "admin", csrf_token: "csrf-admin" };
@@ -26,6 +33,8 @@ function contacto(id: number, datos: Partial<Contacto> = {}): Contacto {
     source: "instagram",
     status: "new",
     created_at: "2026-11-02T10:00:00Z",
+    owner_id: 2,
+    owner_email: "recepcion@prueba.example.com",
     ...datos,
   };
 }
@@ -50,6 +59,7 @@ beforeEach(() => {
         metodo,
         ruta: url.pathname,
         q: url.searchParams.get("q"),
+        consulta: url.searchParams.toString(),
         headers: (init.headers ?? {}) as Record<string, string>,
         cuerpo,
       });
@@ -98,7 +108,15 @@ describe("lista de contactos", () => {
       cuerpo: {
         total: 2,
         items: [
-          contacto(2, { first_name: "Luis", last_name: "Perez", email: null, phone: "+12125550123", source: "walk_in" }),
+          contacto(2, {
+            first_name: "Luis",
+            last_name: "Perez",
+            email: null,
+            phone: "+12125550123",
+            source: "walk_in",
+            owner_id: null,
+            owner_email: null,
+          }),
           contacto(1),
         ],
       },
@@ -108,8 +126,8 @@ describe("lista de contactos", () => {
     const lista = await screen.findByRole("list");
     const filas = within(lista).getAllByRole("listitem");
     expect(filas.map((f) => f.textContent)).toEqual([
-      "Luis Perez(212) 555-0123Nuevo · En persona",
-      "Ana Smithana@clinica.example.comNuevo · Instagram",
+      "Luis Perez(212) 555-0123Nuevo · En persona · Sin responsable",
+      "Ana Smithana@clinica.example.comNuevo · Instagram · recepcion@prueba.example.com",
     ]);
     expect(screen.getByText("2 contactos")).toBeTruthy();
   });
@@ -117,7 +135,7 @@ describe("lista de contactos", () => {
   it("sin contactos, invita a crear el primero", async () => {
     abrir();
 
-    expect(await screen.findByText("Todavía no hay contactos. Crea el primero con «Nuevo contacto».")).toBeTruthy();
+    expect(await screen.findByText("No hay contactos activos. Crea uno con «Nuevo contacto».")).toBeTruthy();
   });
 
   it("si hay más de 20, dice cuántos hay en total", async () => {
@@ -167,7 +185,7 @@ describe("búsqueda", () => {
         ? { status: 200, cuerpo: { total: 1, items: [contacto(7, { first_name: "Jose", last_name: "Perez" })] } }
         : { status: 200, cuerpo: { total: 0, items: [] } };
     const u = abrir();
-    await screen.findByText(/Todavía no hay contactos/);
+    await screen.findByText(/No hay contactos activos/);
 
     await u.type(screen.getByLabelText("Buscar por nombre, apellidos, email o teléfono"), "jose");
 
@@ -177,7 +195,7 @@ describe("búsqueda", () => {
 
   it("sin resultados, lo dice con lo que se buscó", async () => {
     const u = abrir();
-    await screen.findByText(/Todavía no hay contactos/);
+    await screen.findByText(/No hay contactos activos/);
 
     await u.type(screen.getByLabelText("Buscar por nombre, apellidos, email o teléfono"), "nadie");
 
@@ -192,7 +210,7 @@ describe("búsqueda", () => {
       return { status: 200, cuerpo: { total: 0, items: [] } };
     };
     const u = abrir();
-    await screen.findByText(/Todavía no hay contactos/);
+    await screen.findByText(/No hay contactos activos/);
     const buscador = screen.getByLabelText("Buscar por nombre, apellidos, email o teléfono");
 
     await u.type(buscador, "ana");
@@ -217,7 +235,7 @@ describe("alta de contactos", () => {
       return { status: 201, cuerpo: guardados[0] };
     };
     const u = abrir();
-    await screen.findByText(/Todavía no hay contactos/);
+    await screen.findByText(/No hay contactos activos/);
     await u.type(screen.getByLabelText("Buscar por nombre, apellidos, email o teléfono"), "algo");
 
     await rellenar(u, {
@@ -340,7 +358,7 @@ describe("sin tildes (T12b)", () => {
 
   it("buscar con tilde muestra el aviso bajo el buscador", async () => {
     const u = abrir();
-    await screen.findByText(/Todavía no hay contactos/);
+    await screen.findByText(/No hay contactos activos/);
     const buscador = screen.getByLabelText("Buscar por nombre, apellidos, email o teléfono");
 
     await u.type(buscador, "Jos\u00e9");
@@ -359,5 +377,65 @@ describe("formatoTelefono", () => {
   it("muestra los de EE. UU. con su formato y los demás tal cual", () => {
     expect(formatoTelefono("+12125550123")).toBe("(212) 555-0123");
     expect(formatoTelefono("+34612345678")).toBe("+34612345678");
+  });
+});
+
+describe("filtros de estado y responsable (T14)", () => {
+  const consultas = () => llamadas.filter((l) => l.metodo === "GET" && l.ruta === "/api/contacts").map((l) => l.consulta);
+  const ACTIVOS = "status=new&status=contacted&status=scheduled&status=client";
+
+  it("por defecto pide los activos (todos menos Perdido) de cualquier responsable", async () => {
+    abrir();
+
+    await screen.findByText("No hay contactos activos. Crea uno con «Nuevo contacto».");
+    expect(consultas()).toEqual([ACTIVOS]);
+    expect((screen.getByLabelText("Estado") as HTMLSelectElement).value).toBe("activos");
+    expect((screen.getByLabelText("Responsable") as HTMLSelectElement).value).toBe("todos");
+  });
+
+  it("cada filtro cambia lo que se pide a la API y se combina con la búsqueda", async () => {
+    const u = abrir();
+    await screen.findByText(/No hay contactos activos/);
+
+    await u.selectOptions(screen.getByLabelText("Estado"), "lost");
+    await waitFor(() => expect(consultas().at(-1)).toBe("status=lost"));
+    await u.selectOptions(screen.getByLabelText("Estado"), "todos");
+    await waitFor(() => expect(consultas().at(-1)).toBe(""));
+    await u.selectOptions(screen.getByLabelText("Responsable"), "mios");
+    await waitFor(() => expect(consultas().at(-1)).toBe("owner=me"));
+    await u.selectOptions(screen.getByLabelText("Responsable"), "sin");
+    await waitFor(() => expect(consultas().at(-1)).toBe("owner=none"));
+    await u.type(screen.getByLabelText(/^Buscar/), "ana");
+    await waitFor(() => expect(consultas().at(-1)).toBe("q=ana&owner=none"));
+  });
+
+  it("sin resultados con otros filtros, lo dice sin invitar a crear", async () => {
+    const u = abrir();
+    await screen.findByText(/No hay contactos activos/);
+
+    await u.selectOptions(screen.getByLabelText("Responsable"), "mios");
+
+    expect(await screen.findByText("No hay contactos con estos filtros.")).toBeTruthy();
+    await u.type(screen.getByLabelText(/^Buscar/), "nadie");
+    expect(await screen.findByText("No hay contactos que coincidan con «nadie» y estos filtros.")).toBeTruthy();
+  });
+
+  it("al crear un contacto se quitan los filtros para que aparezca el primero", async () => {
+    alta = (cuerpo) => ({ status: 201, cuerpo: contacto(9, cuerpo as Partial<Contacto>) });
+    const u = abrir();
+    await screen.findByText(/No hay contactos activos/);
+    await u.selectOptions(screen.getByLabelText("Estado"), "lost");
+    await waitFor(() => expect(consultas().at(-1)).toBe("status=lost"));
+
+    await rellenar(u, { Nombre: "Eva", Apellidos: "Stone", Email: "eva@x.com", Origen: "google" });
+    expect(screen.queryByLabelText("Responsable", { selector: "select#contacto-owner_id" })).toBeNull();
+    await u.click(screen.getByRole("button", { name: "Guardar contacto" }));
+
+    await screen.findByText("Contacto creado: Eva Stone");
+    await waitFor(() => expect(consultas().at(-1)).toBe(ACTIVOS));
+    expect((screen.getByLabelText("Estado") as HTMLSelectElement).value).toBe("activos");
+    // El alta no envía responsable: lo pone la API (quien lo crea).
+    const post = llamadas.find((l) => l.metodo === "POST");
+    expect(post?.cuerpo).not.toHaveProperty("owner_id");
   });
 });

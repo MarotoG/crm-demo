@@ -102,7 +102,8 @@ class ContactSource(StrEnum):
 class ContactStatus(StrEnum):
     """Estado comercial (T03): Nuevo → Contactado → Cita agendada → Cliente; Perdido desde cualquiera.
 
-    T11 solo crea contactos en «new»; las transiciones llegan en T14.
+    Todo contacto nace en «new». Las transiciones a mano están en app/contacts_routes.py (T14);
+    «scheduled» y «client» los pondrán las citas.
     """
 
     NEW = "new"
@@ -187,3 +188,6 @@ class Contact(Base):
     # Bloqueo optimista (T13): cada edición la sube en 1; quien edita envía la que leyó y,
     # si ya no coincide, otra persona guardó antes (409).
     version: Mapped[int] = mapped_column(default=1, server_default="1")
+    # Responsable (T14): quien lleva el contacto en la clínica (recepción o admin); por
+    # defecto quien lo crea. Puede quedar sin responsable; si se borrara su cuenta, también.
+    owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)

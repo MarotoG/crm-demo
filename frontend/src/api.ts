@@ -1,4 +1,4 @@
-// Llamadas a la API: salud del sistema (T06), sesión y usuarios (T10) y contactos (T12). Las rutas son
+// Llamadas a la API: salud del sistema (T06), sesión y usuarios (T10) y contactos (T12–T14). Las rutas son
 // relativas (/api/...): en desarrollo las reenvía el proxy de Vite y en producción nginx.
 
 export type EstadoSalud =
@@ -183,9 +183,17 @@ export type Contacto = {
   source: OrigenContacto;
   status: EstadoContacto;
   created_at: string;
+  /** Responsable (T14): quién lo lleva en la clínica; null = sin responsable. */
+  owner_id: number | null;
+  owner_email: string | null;
 };
 
 export type ListaContactos = { total: number; items: Contacto[] };
+
+/** Filtros de la lista (T14). `estados` vacío: todos. */
+export type FiltrosContactos = { estados: EstadoContacto[]; responsable: "todos" | "mios" | "sin" };
+
+export const SIN_FILTROS: FiltrosContactos = { estados: [], responsable: "todos" };
 
 export type NuevoContacto = {
   first_name: string;
@@ -195,10 +203,16 @@ export type NuevoContacto = {
   source: OrigenContacto;
 };
 
-/** Los 20 más recientes que coinciden con `busqueda` (vacía: todos) y el total. */
-export function listarContactos(busqueda: string): Promise<ListaContactos> {
+/** Los 20 más recientes que coinciden con `busqueda` (vacía: todos) y los filtros, y el total. */
+export function listarContactos(busqueda: string, filtros: FiltrosContactos = SIN_FILTROS): Promise<ListaContactos> {
+  const parametros = new URLSearchParams();
   const q = busqueda.trim();
-  return peticion<ListaContactos>(q ? `/api/contacts?${new URLSearchParams({ q })}` : "/api/contacts");
+  if (q) parametros.append("q", q);
+  for (const estado of filtros.estados) parametros.append("status", estado);
+  if (filtros.responsable === "mios") parametros.append("owner", "me");
+  if (filtros.responsable === "sin") parametros.append("owner", "none");
+  const consulta = parametros.toString();
+  return peticion<ListaContactos>(consulta ? `/api/contacts?${consulta}` : "/api/contacts");
 }
 
 export function crearContacto(datos: NuevoContacto, csrf: string): Promise<Contacto> {
@@ -217,11 +231,27 @@ export function obtenerContacto(id: number): Promise<ContactoDetalle> {
   return peticion<ContactoDetalle>(`/api/contacts/${id}`);
 }
 
-/** PUT con la ficha entera y la versión leída: 409 si otra persona guardó antes. */
+/** PUT con la ficha entera (con el responsable) y la versión leída: 409 si otra persona guardó antes. */
 export function actualizarContacto(
   id: number,
-  datos: NuevoContacto & { version: number },
+  datos: NuevoContacto & { owner_id: number | null; version: number },
   csrf: string,
 ): Promise<ContactoDetalle> {
   return peticion<ContactoDetalle>(`/api/contacts/${id}`, { method: "PUT", cuerpo: datos, csrf });
+}
+
+/** Cambio de estado a mano (T14): solo a Contactado o Perdido; misma versión que la edición. */
+export function cambiarEstado(
+  id: number,
+  datos: { status: EstadoContacto; version: number },
+  csrf: string,
+): Promise<ContactoDetalle> {
+  return peticion<ContactoDetalle>(`/api/contacts/${id}/status`, { method: "PUT", cuerpo: datos, csrf });
+}
+
+export type Responsable = { id: number; email: string };
+
+/** Quién puede ser responsable: las cuentas activas de recepción y administración. */
+export function listarResponsables(): Promise<Responsable[]> {
+  return peticion<Responsable[]>("/api/contacts/owners");
 }

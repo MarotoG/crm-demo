@@ -29,7 +29,8 @@ beforeEach(() => {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (ruta: string, init: RequestInit = {}) => {
-      const clave = `${init.method ?? "GET"} ${ruta}`;
+      // Sin la consulta (?status=…): los filtros de contactos (T14) no cambian la ruta.
+      const clave = `${init.method ?? "GET"} ${new URL(ruta, "http://localhost").pathname}`;
       llamadas.push({
         clave,
         headers: (init.headers ?? {}) as Record<string, string>,

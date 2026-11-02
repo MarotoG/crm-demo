@@ -1,6 +1,6 @@
-// Contactos (T12): alta, lista de los 20 más recientes y búsqueda mientras se escribe.
-// Lo usan recepción (/recepcion) y administración (/admin). Quién puede ver y crear lo
-// decide la API (403 para profesional y cliente); aquí solo se muestra.
+// Contactos (T12): alta, lista de los 20 más recientes y búsqueda mientras se escribe; filtros
+// de estado y responsable (T14). Lo usan recepción (/recepcion) y administración (/admin). Quién
+// puede ver y crear lo decide la API (403 para profesional y cliente); aquí solo se muestra.
 
 import { useEffect, useState, type FormEvent } from "react";
 import { Link } from "react-router";
@@ -11,9 +11,11 @@ import {
   listarContactos,
   type Contacto,
   type EstadoContacto,
+  type FiltrosContactos,
   type ListaContactos,
   type NuevoContacto,
   type OrigenContacto,
+  type Responsable,
 } from "./api";
 import { AREA_DE, useSesion } from "./sesion";
 
@@ -46,6 +48,21 @@ export const NOMBRE_ESTADO: Record<EstadoContacto, string> = {
   lost: "Perdido",
 };
 
+// Filtro de estado (decisión T14): por defecto, los activos (todos menos Perdido).
+const FILTROS_DE_ESTADO: Record<string, { nombre: string; estados: EstadoContacto[] }> = {
+  activos: { nombre: "Activos (todos menos Perdido)", estados: ["new", "contacted", "scheduled", "client"] },
+  todos: { nombre: "Todos", estados: [] },
+  ...Object.fromEntries(
+    Object.entries(NOMBRE_ESTADO).map(([estado, nombre]) => [estado, { nombre, estados: [estado as EstadoContacto] }]),
+  ),
+};
+
+const FILTROS_DE_RESPONSABLE: Record<FiltrosContactos["responsable"], string> = {
+  todos: "Todos",
+  mios: "Mis contactos",
+  sin: "Sin responsable",
+};
+
 /** +12125550123 → (212) 555-0123; los de otros países, tal cual (E.164). */
 export function formatoTelefono(telefono: string): string {
   const eeuu = /^\+1(\d{3})(\d{3})(\d{4})$/.exec(telefono);
@@ -67,6 +84,8 @@ export default function Contactos() {
   const { caducada } = useSesion();
   const [texto, setTexto] = useState(""); // lo que hay escrito en el buscador
   const [busqueda, setBusqueda] = useState(""); // lo que se busca, tras la pausa
+  const [filtroEstado, setFiltroEstado] = useState("activos");
+  const [filtroResponsable, setFiltroResponsable] = useState<FiltrosContactos["responsable"]>("todos");
   const [recarga, setRecarga] = useState(0);
   const [lista, setLista] = useState<EstadoLista>({ tipo: "cargando" });
   const [formularioAbierto, setFormularioAbierto] = useState(false);
@@ -81,7 +100,7 @@ export default function Contactos() {
     // Si llega tarde la respuesta de una búsqueda anterior, se descarta: solo vale la última.
     let vigente = true;
     setLista({ tipo: "cargando" });
-    listarContactos(busqueda)
+    listarContactos(busqueda, { estados: FILTROS_DE_ESTADO[filtroEstado].estados, responsable: filtroResponsable })
       .then((resultado) => vigente && setLista({ tipo: "ok", lista: resultado }))
       .catch((error: unknown) => {
         if (!vigente) return;
@@ -91,16 +110,20 @@ export default function Contactos() {
     return () => {
       vigente = false;
     };
-  }, [busqueda, recarga, caducada]);
+  }, [busqueda, filtroEstado, filtroResponsable, recarga, caducada]);
 
   function alCrear(contacto: Contacto) {
     setFormularioAbierto(false);
     setCreado(`Contacto creado: ${contacto.first_name} ${contacto.last_name}`);
-    // Se vacía la búsqueda para que el nuevo aparezca el primero de la lista.
+    // Se vacían la búsqueda y los filtros para que el nuevo aparezca el primero de la lista.
     setTexto("");
     setBusqueda("");
+    setFiltroEstado("activos");
+    setFiltroResponsable("todos");
     setRecarga((n) => n + 1);
   }
+
+  const filtrosPorDefecto = filtroEstado === "activos" && filtroResponsable === "todos";
 
   return (
     <section className="tarjeta" aria-labelledby="titulo-contactos">
@@ -143,6 +166,32 @@ export default function Contactos() {
         </p>
       )}
 
+      <div className="filtros">
+        <label>
+          Estado
+          <select value={filtroEstado} onChange={(e) => setFiltroEstado(e.target.value)}>
+            {Object.entries(FILTROS_DE_ESTADO).map(([valor, { nombre }]) => (
+              <option key={valor} value={valor}>
+                {nombre}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Responsable
+          <select
+            value={filtroResponsable}
+            onChange={(e) => setFiltroResponsable(e.target.value as FiltrosContactos["responsable"])}
+          >
+            {Object.entries(FILTROS_DE_RESPONSABLE).map(([valor, nombre]) => (
+              <option key={valor} value={valor}>
+                {nombre}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
       {lista.tipo === "cargando" && <p>Cargando contactos…</p>}
       {lista.tipo === "error" && (
         <>
@@ -154,23 +203,31 @@ export default function Contactos() {
           </button>
         </>
       )}
-      {lista.tipo === "ok" && <ListaDeContactos lista={lista.lista} busqueda={busqueda} />}
+      {lista.tipo === "ok" && (
+        <ListaDeContactos lista={lista.lista} busqueda={busqueda} filtrosPorDefecto={filtrosPorDefecto} />
+      )}
     </section>
   );
 }
 
-function ListaDeContactos({ lista, busqueda }: { lista: ListaContactos; busqueda: string }) {
+function ListaDeContactos({
+  lista,
+  busqueda,
+  filtrosPorDefecto,
+}: {
+  lista: ListaContactos;
+  busqueda: string;
+  filtrosPorDefecto: boolean;
+}) {
   const { estado } = useSesion();
   // Cada nombre abre su ficha (T13) dentro del área de quien la mira: /recepcion o /admin.
   const area = estado.tipo === "dentro" ? AREA_DE[estado.usuario.role] : "";
   if (lista.items.length === 0) {
-    return (
-      <p>
-        {busqueda
-          ? `No hay contactos que coincidan con «${busqueda}».`
-          : "Todavía no hay contactos. Crea el primero con «Nuevo contacto»."}
-      </p>
-    );
+    // Por defecto no se ven los perdidos: no se dice «todavía no hay contactos» porque puede haberlos.
+    let mensaje = "No hay contactos activos. Crea uno con «Nuevo contacto».";
+    if (!filtrosPorDefecto) mensaje = "No hay contactos con estos filtros.";
+    if (busqueda) mensaje = `No hay contactos que coincidan con «${busqueda}»${filtrosPorDefecto ? "" : " y estos filtros"}.`;
+    return <p>{mensaje}</p>;
   }
   return (
     <>
@@ -189,7 +246,7 @@ function ListaDeContactos({ lista, busqueda }: { lista: ListaContactos; busqueda
               {[c.email, c.phone && formatoTelefono(c.phone)].filter(Boolean).join(" · ")}
             </span>
             <span className="contacto__meta">
-              {NOMBRE_ESTADO[c.status]} · {NOMBRE_ORIGEN[c.source]}
+              {NOMBRE_ESTADO[c.status]} · {NOMBRE_ORIGEN[c.source]} · {c.owner_email ?? "Sin responsable"}
             </span>
           </li>
         ))}
@@ -198,7 +255,8 @@ function ListaDeContactos({ lista, busqueda }: { lista: ListaContactos; busqueda
   );
 }
 
-const VACIO = { first_name: "", last_name: "", email: "", phone: "", source: "" as OrigenContacto | "" };
+// owner_id: el id del responsable como texto ("" = sin responsable); solo se usa al editar (T14).
+const VACIO = { first_name: "", last_name: "", email: "", phone: "", source: "" as OrigenContacto | "", owner_id: "" };
 
 type Campo = keyof typeof VACIO;
 
@@ -208,20 +266,26 @@ const ETIQUETAS: Record<Campo, string> = {
   email: "Email",
   phone: "Teléfono",
   source: "Origen",
+  owner_id: "Responsable",
 };
 
 const CAMPOS_SIN_TILDES: Campo[] = ["first_name", "last_name", "email"];
 
 export type DatosFormulario = typeof VACIO;
 
+/** Lo que el formulario entrega al guardar; `owner_id` solo si muestra el responsable. */
+export type DatosGuardados = NuevoContacto & { owner_id?: number | null };
+
 /**
  * Formulario de contacto para el alta (T12) y la edición (T13): mismos campos y mismas
  * comprobaciones; quien lo usa decide qué hace al guardar (`guardar`) y con el resultado.
+ * Con `responsables` (edición, T14) muestra además el desplegable de responsable.
  */
 export function FormularioContacto<T>({
   titulo = "Nuevo contacto",
   textoGuardar = "Guardar contacto",
   inicial = VACIO,
+  responsables,
   guardar,
   alGuardar,
   alCancelar,
@@ -230,7 +294,8 @@ export function FormularioContacto<T>({
   titulo?: string;
   textoGuardar?: string;
   inicial?: DatosFormulario;
-  guardar: (datos: NuevoContacto, csrf: string) => Promise<T>;
+  responsables?: Responsable[];
+  guardar: (datos: DatosGuardados, csrf: string) => Promise<T>;
   alGuardar: (resultado: T) => void;
   alCancelar: () => void;
   /** Ante un 409, devuelve true si quien usa el formulario lo ha resuelto (otra versión, T13). */
@@ -259,7 +324,9 @@ export function FormularioContacto<T>({
     }
     setGuardando(true);
     try {
-      const nuevo: NuevoContacto = { ...datos, source: datos.source };
+      const { owner_id, ...resto } = datos;
+      const nuevo: DatosGuardados = { ...resto, source: datos.source };
+      if (responsables) nuevo.owner_id = owner_id ? Number(owner_id) : null;
       alGuardar(await guardar(nuevo, csrf));
     } catch (error) {
       setGuardando(false);
@@ -337,6 +404,30 @@ export function FormularioContacto<T>({
           </span>
         )}
       </div>
+      {responsables && (
+        <div className="campo">
+          <label htmlFor="contacto-owner_id">{ETIQUETAS.owner_id}</label>
+          <select
+            id="contacto-owner_id"
+            value={datos.owner_id}
+            aria-invalid={errores.owner_id ? true : undefined}
+            aria-describedby={errores.owner_id ? "error-owner_id" : undefined}
+            onChange={(e) => cambiar("owner_id", e.target.value)}
+          >
+            <option value="">Sin responsable</option>
+            {responsables.map((r) => (
+              <option key={r.id} value={String(r.id)}>
+                {r.email}
+              </option>
+            ))}
+          </select>
+          {errores.owner_id && (
+            <span className="error" id="error-owner_id">
+              {errores.owner_id}
+            </span>
+          )}
+        </div>
+      )}
       {general.map((mensaje) => (
         <p key={mensaje} className="error" role="alert">
           {mensaje}

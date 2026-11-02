@@ -280,6 +280,26 @@ select:focus-visible {
   font-weight: 600;
 }
 
+/* Filtros de estado y responsable (T14): uno debajo de otro en móvil, en fila si caben. */
+.filtros {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  margin: 0 0 0.5rem;
+}
+
+.filtros label {
+  display: flex;
+  flex: 1 1 12rem;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-weight: 600;
+}
+
+.ficha + .acciones {
+  margin-top: 1rem;
+}
+
 .contactos {
   list-style: none;
   margin: 0.5rem 0 0;
