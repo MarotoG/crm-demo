@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
 import app.auth_routes
-from app.auth import SESSION_COOKIE, SESSION_DURATION, create_session, hash_token
+from app.auth import SESSION_COOKIE, SESSION_DURATION, create_session, csrf_token_for, hash_token
 from app.main import app as fastapi_app
 from app.models import Role, User, UserSession
 from app.security import hash_password
@@ -41,7 +41,9 @@ def test_login_correcto_devuelve_usuario_sin_hash_y_cookie_segura(client, usuari
     response = login(client)
 
     assert response.status_code == 200
-    assert response.json() == {"id": usuario.id, "email": usuario.email, "role": "reception"}
+    datos = response.json()
+    assert datos == {"id": usuario.id, "email": usuario.email, "role": "reception", "csrf_token": datos["csrf_token"]}
+    assert datos["csrf_token"] == csrf_token_for(response.cookies[SESSION_COOKIE])
     cookie = response.headers["set-cookie"]
     assert cookie.startswith(f"{SESSION_COOKIE}=")
     assert "HttpOnly" in cookie

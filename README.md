@@ -1,6 +1,6 @@
 # crm-demo — CRM para pequeñas clínicas estéticas
 
-> **Estado: en desarrollo (Trabajo Fin de Máster, entrega noviembre de 2026).** Por ahora existen el esqueleto de la API, PostgreSQL en Docker, las migraciones de servicios y usuarios, un procedimiento para crear las cuentas de demo, login con sesión en servidor por API (todavía sin pantalla de login) y una interfaz mínima que muestra el estado de la API y de la base de datos; todavía sin funcionalidades del CRM. Este README es provisional y se completará con hechos comprobados a medida que avance el proyecto.
+> **Estado: en desarrollo (Trabajo Fin de Máster, entrega noviembre de 2026).** Por ahora existen el esqueleto de la API, PostgreSQL en Docker, las migraciones de servicios y usuarios, un procedimiento para crear las cuentas de demo, login y logout con sesión en servidor, protección CSRF y un primer permiso por rol, por API (todavía sin pantalla de login) y una interfaz mínima que muestra el estado de la API y de la base de datos; todavía sin funcionalidades del CRM. Este README es provisional y se completará con hechos comprobados a medida que avance el proyecto.
 
 ## Descripción
 
@@ -85,9 +85,15 @@ Con la API en marcha:
 - `http://127.0.0.1:8000/api/health` → `{"status":"ok"}` (la API está viva; no consulta la BD)
 - `http://127.0.0.1:8000/api/health/db` → `{"status":"ok","database":"ok"}`, o HTTP 503 `{"status":"error","database":"unavailable"}` si la API no puede consultar PostgreSQL
 - `http://127.0.0.1:8000/docs` → documentación interactiva (Swagger UI; carga sus estilos y scripts desde un CDN, necesita Internet)
-- `POST /api/auth/login` con `{"email": "...", "password": "..."}` → 200 con id, email y rol, y una cookie de sesión `crm_session` (HttpOnly, 8 h). Si las credenciales no son válidas: 401 «Email o contraseña incorrectos», el mismo mensaje exista o no el email; tras 5 fallos en 15 min para el mismo email desde la misma IP: 429
-- `GET /api/auth/me` → el usuario de la sesión actual, o 401 sin sesión válida
+- `POST /api/auth/login` con `{"email": "...", "password": "..."}` → 200 con id, email, rol y `csrf_token`, y una cookie de sesión `crm_session` (HttpOnly, 8 h). Si las credenciales no son válidas: 401 «Email o contraseña incorrectos», el mismo mensaje exista o no el email; tras 5 fallos en 15 min para el mismo email desde la misma IP: 429
+- `GET /api/auth/me` → el usuario de la sesión actual y su `csrf_token`, o 401 sin sesión válida
+- `POST /api/auth/logout` con la cabecera `X-CSRF-Token: <csrf_token>` → 204: revoca la sesión de ese dispositivo (las de otros dispositivos siguen) y borra la cookie. Sin el token correcto: 403. Sin sesión válida: 204 igualmente
+- `GET /api/users` → lista de usuarios (id, email, rol, activo; nunca el hash), solo para el rol administrador: 403 «Permiso denegado» con otro rol y 401 sin sesión
 - Si PostgreSQL no responde, las rutas que lo usan devuelven 503 «Servicio no disponible», sin detalles
+
+**Protección CSRF.** Toda petición que cambie datos (salvo el login) debe llevar la cabecera `X-CSRF-Token` con el `csrf_token` que devuelven el login y `/api/auth/me`. Se calcula con `CRM_SECRET_KEY` (obligatoria para el login: al menos 32 caracteres y distinta del valor de ejemplo); si cambia la clave, los tokens anteriores dejan de valer y basta volver a pedir `/api/auth/me`.
+
+**Sesiones antiguas.** Cada login borra las sesiones caducadas hace más de 30 días. También puede hacerse a mano, desde `backend/`: `.venv\Scripts\python.exe -m app.purge_sessions` (solo muestra cuántas ha borrado). La tabla de sesiones no es un registro de auditoría de accesos a datos de clientes.
 
 **Pruebas y base de datos.** Las pruebas que necesitan PostgreSQL usan una base aparte, `crm_demo_test`, en el mismo contenedor: se crea sola la primera vez, se migra al empezar y cada prueba deshace sus cambios, así que `crm_demo` no se toca. Con la BD apagada esas pruebas se saltan con un aviso (`pytest -rs` muestra el motivo) y el resto se ejecuta.
 

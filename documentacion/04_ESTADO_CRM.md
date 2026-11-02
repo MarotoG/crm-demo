@@ -1,6 +1,6 @@
 # Estado del CRM de clínicas y continuidad entre herramientas
 
-Actualizado: 2026-10-31 tras la entrega local de T08 (login y sesión en servidor). Este archivo registra contexto; no acredita código ni despliegue por sí mismo: la evidencia está en cada sección.
+Actualizado: 2026-11-02 tras la entrega local de T09 (logout, CSRF, purga de sesiones y permisos por rol). Este archivo registra contexto; no acredita código ni despliegue por sí mismo: la evidencia está en cada sección.
 
 ## Confirmado
 
@@ -95,7 +95,7 @@ T06 cerrado: el alumno comprobó la página en su navegador y aprobó; commit `f
 - El alumno rellenó las cuatro `CRM_DEMO_PASSWORD_*` en su `.env` y ejecutó `python -m app.seed_demo` (31/10): «actualizada» en las 4 cuentas, que ya tienen sus contraseñas en lugar de las de prueba.
 - `.vscode/settings.json` tiene `python.terminal.useEnvFile: false` (observado el 31/10); pendiente de que el alumno confirme que lo desactivó.
 
-T07 cerrado: aprobado por el alumno, commit `e42670a` publicado en GitHub el 31/10 (comprobado sin credenciales vía API: 12 archivos en el commit, 53 rastreados, sin `.env`, `historico/`, `.vscode`, `.venv` ni biblioteca; `seed_demo.py` accesible en `raw.githubusercontent.com`).
+T07 cerrado: aprobado por el alumno, commit `e42670a` publicado en GitHub el 31/10 (comprobado sin credenciales vía API: 12 archivos en el commit, 53 rastreados [corrección 01/11: eran 53 entradas del árbol contando carpetas; 44 archivos], sin `.env`, `historico/`, `.vscode`, `.venv` ni biblioteca; `seed_demo.py` accesible en `raw.githubusercontent.com`).
 
 ## T08 — login y sesión en servidor (31/10/2026)
 
@@ -105,9 +105,19 @@ T07 cerrado: aprobado por el alumno, commit `e42670a` publicado en GitHub el 31/
 - API real: `/api/auth/me` sin cookie o con token falso → 401; datos vacíos → 422; 5 fallos → el 6.º 429; tiempos con email existente/inexistente ~0,15 s ambos; BD parada → login y me 503 en ~3 s, log sin tokens ni contraseñas, recuperación al arrancar. Login correcto con contraseña real de demo: comprobado por el alumno con `Get-Credential` + `Invoke-RestMethod` contra `/api/auth/login` y `/api/auth/me`. Repetido el 01/11 antes del commit: `pytest` → 45 passed, `alembic check` sin diferencias.
 - Revisión general (pedida por el alumno): pip check, 36 = 36, `alembic check`, compileall, `npm run build`, `npm audit` 0, Compose válido, sin CRLF. Casos límite y riesgos en la conversación y en `historico/T08_historico.md`: IP del proxy en producción (el limitador se volvería por email global), limitador por proceso, sesiones caducadas sin purga, caracteres invisibles en emails, carrera de dos `seed_demo` (la segunda falla con UniqueViolation, sin duplicados).
 
+T08 cerrado: aprobado por el alumno, commit `d7ff293` publicado en GitHub el 01/11 (comprobado sin credenciales vía API: 15 archivos en el commit, 51 archivos rastreados iguales en local y remoto, sin `.env`, `historico/`, `.vscode`, `.venv` ni biblioteca; `auth.py` accesible en `raw.githubusercontent.com`).
+
+## T09 — logout, CSRF, purga de sesiones y permisos por rol (02/11/2026)
+
+- Decisiones del alumno (01–02/11, tras explicarle CSRF, purga, ruta de admin y alcance del logout): CSRF con token secreto (HMAC) en vez de solo comprobar `Origin`/`Sec-Fetch-Site`, porque protege también frente a otros subdominios del mismo dominio (p. ej. n8n); retención de sesiones de 30 días con borrado automático; `GET /api/users` solo para admin como primera ruta de administración (resto 403, sin sesión 401); logout solo de la sesión actual. Propuesto y aceptado por defecto: la purga automática se hace en cada login (sin tarea programada) y además hay comando manual. El registro de qué usuario accede a qué datos de qué cliente (control de auditoría, en la línea de HIPAA) queda para cuando existan los contactos (T11 en adelante), en una tabla propia: `sessions` no es ese registro. `CRM_SECRET_KEY` comprobada por el alumno sin mostrarla: 64 caracteres, distinta del ejemplo.
+- Código: `app/config.py` valida `CRM_SECRET_KEY` (≥ 32, distinta del ejemplo; opcional para que `/api/health/db` no dependa de ella) y `hide_input_in_errors` evita que un error muestre valores. `app/auth.py`: `find_valid_session`, `csrf_token_for` (HMAC-SHA256 del token de sesión con la clave; no se guarda, se recalcula), `csrf_matches` (`compare_digest` sobre bytes), `require_csrf` (401 sin sesión, 403 sin token válido), `require_roles` (403 «Permiso denegado») y `purge_expired_sessions` (borra `expires_at < now − 30 días`). `app/auth_routes.py`: login y `/me` devuelven `csrf_token`; el login purga; `POST /api/auth/logout` → 204, revoca la sesión y borra la cookie con los mismos atributos; sin sesión válida 204; con sesión válida y sin token 403. `app/users_routes.py`: `GET /api/users` (id, email, rol, activo). `app/purge_sessions.py`: comando manual. Logs de 403 por rol y por CSRF con user_id, rol y ruta, sin tokens ni emails. Sin migración ni dependencias nuevas.
+- Pruebas: `pytest` → 83 passed (38 nuevas: `test_csrf`, `test_logout`, `test_permissions`, `test_purge_sessions`, `test_route_protection`, que recorre el OpenAPI y exige 401 sin sesión en toda ruta no incluida en la lista de públicas). 15 mutaciones deliberadas → 15 detectadas (la de «clave de ejemplo aceptada» sobrevivió al principio porque el ejemplo ya era corto; se ajustó la prueba para exigir el mensaje concreto). `alembic check` sin diferencias, `pip check` limpio, sin CRLF, imports sin avisos. `crm_demo` intacta (4 usuarios, 1 sesión: la del login real del alumno) y `crm_demo_test` sin filas.
+- API real (uvicorn en 8001 contra `crm_demo_test`, usuarios temporales con contraseña aleatoria no mostrada, borrados al final): login 200 con `csrf_token` y cookie HttpOnly/Lax/8 h; `/me` devuelve el mismo token; recepción en `/api/users` 403; logout sin cabecera o con token falso 403 y la sesión sigue; logout con token 204 y `Max-Age=0`; después `/me` 401, también reenviando la cookie antigua; la otra sesión (móvil) sigue en 200; logout repetido 204; profesional y cliente 403; admin 200 con 4 usuarios y campos `active, email, id, role`; sin sesión 401. `python -m app.purge_sessions` → «Sesiones borradas: 0», exit 0. Comprobado por el alumno el 02/11 con las cuentas de demo reales (`Get-Credential`, API en el 8000): admin → `/api/users` 200; recepción → 403; en ambas, logout sin token 403 y la sesión sigue (me 200), logout con token 204 y la cookie antigua 401.
+- Límites asumidos: el login no lleva CSRF (no hay sesión de la que derivarlo; «login CSRF» aceptado); los logs `INFO` (logout) no se ven hasta configurar logging (T28); cambiar `CRM_SECRET_KEY` invalida los tokens CSRF vigentes; un XSS en el propio CRM anularía cualquier protección CSRF.
+
 ## Próxima acción
 
-T08 entregado en local, pendiente de revisión del alumno, commit y push (incluye la anotación de `e42670a` en 04 y 07). Siguiente propuesta: T09, logout (revocar sesión), protección CSRF y permisos básicos por rol con pruebas negativas. Pendiente de aprobación.
+T09 entregado en local, pendiente de revisión del alumno, commit y push (incluye la anotación de `d7ff293` en 04 y 07). Siguiente propuesta: T10, login en la interfaz y rutas por rol (entrar/salir desde el navegador, enviar `X-CSRF-Token`, estados de carga/error). Pendiente de aprobación.
 
 En paralelo, T02b: el alumno puede ejecutar en Quijote los comandos de solo lectura del anexo A del informe y aportar la salida revisada sin secretos; confirmar en Cloudflare si `crm.marotothecreator.com` está libre y en el aula la hora/zona de entrega.
 
@@ -115,11 +125,11 @@ En paralelo, T02b: el alumno puede ejecutar en Quijote los comandos de solo lect
 
 | Campo | Estado |
 |---|---|
-| Tarea actual | T08 entregado en local (pendiente de revisión, commit y push); T01, T03, T04, T05, T06, T07 y encargo B cerrados; T02a documental revisado; T02b real pendiente |
-| Último commit verificado | `e42670a` (T07) en `main`, publicado en GitHub (31/10/2026) |
+| Tarea actual | T09 entregado en local (pendiente de revisión, commit y push); T01, T03, T04, T05, T06, T07, T08 y encargo B cerrados; T02a documental revisado; T02b real pendiente |
+| Último commit verificado | `d7ff293` (T08) en `main`, publicado en GitHub (01/11/2026) |
 | Comandos reales de arranque/pruebas | Raíz: `docker compose up -d db`. Desde `backend/`: `.venv\Scripts\python.exe -m pytest -v`; `.venv\Scripts\alembic.exe upgrade head`; `.venv\Scripts\python.exe -m app.seed_demo`; `.venv\Scripts\python.exe -m uvicorn app.main:app --reload`. Desde `frontend/`: `npm ci`; `npm run dev`; `npm run build` (ver README) |
-| Evidencia observada | Inventario local T01; informe Quijote con hash comprobado; local 30/10: pytest 5 passed, PostgreSQL healthy, migración aplicada, persistencia tras `down`/`up`, interfaz build OK y estados OK/API caída/BD caída verificados en Chrome headless; 31/10: pytest 13 passed, migración `users` aplicada y reversible, cuentas de demo idempotentes con hash Argon2id; T08: pytest 45 passed con BD de pruebas, 10/10 mutaciones detectadas, login/me/429/503 en API real; servidor no observado |
-| Próximo hito | Cerrar T08; después T09: logout, CSRF y permisos |
+| Evidencia observada | Inventario local T01; informe Quijote con hash comprobado; local 30/10: pytest 5 passed, PostgreSQL healthy, migración aplicada, persistencia tras `down`/`up`, interfaz build OK y estados OK/API caída/BD caída verificados en Chrome headless; 31/10: pytest 13 passed, migración `users` aplicada y reversible, cuentas de demo idempotentes con hash Argon2id; T08: pytest 45 passed con BD de pruebas, 10/10 mutaciones detectadas, login/me/429/503 en API real; T09: pytest 83 passed, 15/15 mutaciones, logout/CSRF/permisos en API real; servidor no observado |
+| Próximo hito | Cerrar T09; después T10: login en la interfaz y rutas por rol |
 
 Histórico narrativo por fases (decisiones, alternativas descartadas, dónde está cada cosa en el código y preguntas del tribunal) en `documentacion/historico/`, solo local e ignorado por Git; se actualiza al cerrar cada tarea, antes de proponer el commit.
 
