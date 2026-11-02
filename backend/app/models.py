@@ -3,7 +3,7 @@
 from datetime import datetime
 from enum import StrEnum
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, MetaData, String, func, true
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, MetaData, String, func, text, true
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 # Nombres de restricciones predecibles, para que las migraciones sean estables.
@@ -85,3 +85,90 @@ class UserSession(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ContactSource(StrEnum):
+    """De dónde llegó el contacto (lista fija, decisión T11): permite contar por canal."""
+
+    INSTAGRAM = "instagram"
+    FACEBOOK = "facebook"
+    GOOGLE = "google"
+    WEBSITE = "website"
+    REFERRAL = "referral"
+    WALK_IN = "walk_in"
+    OTHER = "other"
+
+
+class ContactStatus(StrEnum):
+    """Estado comercial (T03): Nuevo → Contactado → Cita agendada → Cliente; Perdido desde cualquiera.
+
+    T11 solo crea contactos en «new»; las transiciones llegan en T14.
+    """
+
+    NEW = "new"
+    CONTACTED = "contacted"
+    SCHEDULED = "scheduled"
+    CLIENT = "client"
+    LOST = "lost"
+
+
+def _in_list(column: str, values: type[StrEnum]) -> str:
+    return f"{column} IN ({', '.join(repr(v.value) for v in values)})"
+
+
+def _name_normalized(column: str) -> str:
+    # Sin espacios en los extremos ni repetidos, y no vacío.
+    return rf"{column} = btrim(regexp_replace({column}, '\s+', ' ', 'g')) AND {column} <> ''"
+
+
+class Contact(Base):
+    """Ficha de una persona: lead y después cliente, sin duplicarla (T11).
+
+    Sin datos clínicos (alergias, fecha de nacimiento, historia) ni notas libres.
+    La BD repite las reglas de la API para que nadie las salte escribiendo directamente.
+    """
+
+    __tablename__ = "contacts"
+    __table_args__ = (
+        CheckConstraint("email IS NOT NULL OR phone IS NOT NULL", name="email_or_phone"),
+        CheckConstraint("email = lower(btrim(email))", name="email_normalized"),
+        # E.164: «+», prefijo de país sin 0 inicial y de 8 a 15 cifras en total.
+        CheckConstraint(r"phone ~ '^\+[1-9][0-9]{7,14}$'", name="phone_e164"),
+        CheckConstraint(_name_normalized("first_name"), name="first_name_normalized"),
+        CheckConstraint(_name_normalized("last_name"), name="last_name_normalized"),
+        CheckConstraint(_in_list("source", ContactSource), name="source_valid"),
+        CheckConstraint(_in_list("status", ContactStatus), name="status_valid"),
+        # Duplicados (decisión T11): el email o el teléfono pueden repetirse (una familia),
+        # pero no junto con el mismo nombre y apellidos, sin distinguir mayúsculas. Al ser
+        # índices únicos de PostgreSQL, dos altas simultáneas no pueden pasar las dos.
+        Index(
+            "uq_contacts_name_email",
+            func.lower(text("first_name")),
+            func.lower(text("last_name")),
+            text("email"),
+            unique=True,
+            postgresql_where=text("email IS NOT NULL"),
+        ),
+        Index(
+            "uq_contacts_name_phone",
+            func.lower(text("first_name")),
+            func.lower(text("last_name")),
+            text("phone"),
+            unique=True,
+            postgresql_where=text("phone IS NOT NULL"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    first_name: Mapped[str] = mapped_column(String(100))
+    last_name: Mapped[str] = mapped_column(String(100))
+    email: Mapped[str | None] = mapped_column(String(254))
+    phone: Mapped[str | None] = mapped_column(String(16))
+    source: Mapped[str] = mapped_column(String(20))
+    status: Mapped[str] = mapped_column(String(20), default=ContactStatus.NEW, server_default=ContactStatus.NEW.value)
+    # Si se borrara la cuenta de quien lo creó, el contacto se conserva.
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

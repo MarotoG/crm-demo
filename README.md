@@ -1,6 +1,6 @@
 # crm-demo — CRM para pequeñas clínicas estéticas
 
-> **Estado: en desarrollo (Trabajo Fin de Máster, entrega noviembre de 2026).** Por ahora existen el esqueleto de la API, PostgreSQL en Docker, las migraciones de servicios y usuarios, un procedimiento para crear las cuentas de demo, login y logout con sesión en servidor y protección CSRF, y una interfaz con pantalla de login, un área por rol (la de administración lista los usuarios) y el estado de la API y de la base de datos; todavía sin funcionalidades del CRM (contactos, agenda, portal). Este README es provisional y se completará con hechos comprobados a medida que avance el proyecto.
+> **Estado: en desarrollo (Trabajo Fin de Máster, entrega noviembre de 2026).** Por ahora existen el esqueleto de la API, PostgreSQL en Docker, las migraciones de servicios y usuarios, un procedimiento para crear las cuentas de demo, login y logout con sesión en servidor y protección CSRF, y una interfaz con pantalla de login, un área por rol (la de administración lista los usuarios) y el estado de la API y de la base de datos; en el backend, además, el alta de contactos (todavía sin pantalla); faltan las demás funcionalidades del CRM (agenda, portal). Este README es provisional y se completará con hechos comprobados a medida que avance el proyecto.
 
 ## Descripción
 
@@ -88,6 +88,7 @@ Con la API en marcha:
 - `POST /api/auth/login` con `{"email": "...", "password": "..."}` → 200 con id, email, rol y `csrf_token`, y una cookie de sesión `crm_session` (HttpOnly, 8 h). Si las credenciales no son válidas: 401 «Email o contraseña incorrectos», el mismo mensaje exista o no el email; tras 5 fallos en 15 min para el mismo email desde la misma IP: 429
 - `GET /api/auth/me` → el usuario de la sesión actual y su `csrf_token`, o 401 sin sesión válida
 - `POST /api/auth/logout` con la cabecera `X-CSRF-Token: <csrf_token>` → 204: revoca la sesión de ese dispositivo (las de otros dispositivos siguen) y borra la cookie. Sin el token correcto: 403. Sin sesión válida: 204 igualmente
+- `POST /api/contacts` (admin y recepción, con `X-CSRF-Token`) con `first_name`, `last_name`, `source` y al menos `email` o `phone` → 201 con la ficha creada en estado `new`. Se guardan normalizados: nombre sin espacios de más (respetando mayúsculas), email en minúsculas y teléfono en formato E.164 (un número de EE. UU. de 10 cifras como `(212) 555-0123` se guarda como `+12125550123`; los de otros países deben empezar por `+`). `source`: `instagram`, `facebook`, `google`, `website`, `referral`, `walk_in` u `other`. Datos no válidos: 422 con un mensaje por campo. Mismo nombre y apellidos con el mismo email o teléfono (sin distinguir mayúsculas): 409; una familia sí puede compartir email o teléfono. Sin datos clínicos ni notas libres
 - `GET /api/users` → lista de usuarios (id, email, rol, activo; nunca el hash), solo para el rol administrador: 403 «Permiso denegado» con otro rol y 401 sin sesión
 - Si PostgreSQL no responde, las rutas que lo usan devuelven 503 «Servicio no disponible», sin detalles
 

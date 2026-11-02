@@ -10,6 +10,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app as fastapi_app
+from app.models import Role, User
+from app.security import hash_password
 
 PUBLICAS = {
     ("GET", "/api/health"),
@@ -35,3 +37,19 @@ def test_toda_ruta_no_publica_responde_401_sin_sesion(db, method, path):
     response = TestClient(fastapi_app).request(method, url)
 
     assert response.status_code == 401, f"{method} {path} no exige sesión"
+
+
+def test_toda_ruta_que_cambia_datos_exige_csrf(db):
+    """Con sesión válida pero sin X-CSRF-Token, toda ruta no GET (salvo las públicas) da 403."""
+    db.add(User(email="csrf-admin@prueba.example.com", password_hash=hash_password("contraseña-larga"), role=Role.ADMIN))
+    db.flush()
+    client = TestClient(fastapi_app)
+    login = client.post("/api/auth/login", json={"email": "csrf-admin@prueba.example.com", "password": "contraseña-larga"})
+    assert login.status_code == 200
+
+    rutas = sorted((m, p) for m, p in rutas_de_la_api() - PUBLICAS if m != "GET")
+    assert rutas, "no hay rutas que cambien datos: esta prueba no comprobaría nada"
+    for method, path in rutas:
+        response = client.request(method, re.sub(r"\{[^}]+\}", "1", path), json={})
+        assert response.status_code == 403, f"{method} {path} no exige el token CSRF"
+        assert response.json() == {"detail": "Token CSRF ausente o no válido"}
