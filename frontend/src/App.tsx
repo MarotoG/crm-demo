@@ -4,6 +4,7 @@
 import { Route, Routes } from "react-router";
 
 import { AreaAdmin, Bienvenida, Inicio, NoEncontrada, RutaProtegida, SoloRol } from "./Areas";
+import Contactos from "./Contactos";
 import Login from "./Login";
 import { SesionProvider } from "./sesion";
 
@@ -15,7 +16,7 @@ export default function App() {
         <Route path="/login" element={<Login />} />
         <Route element={<RutaProtegida />}>
           <Route path="/admin" element={<SoloRol rol="admin"><AreaAdmin /></SoloRol>} />
-          <Route path="/recepcion" element={<SoloRol rol="reception"><Bienvenida /></SoloRol>} />
+          <Route path="/recepcion" element={<SoloRol rol="reception"><Contactos /></SoloRol>} />
           <Route path="/profesional" element={<SoloRol rol="professional"><Bienvenida /></SoloRol>} />
           <Route path="/portal" element={<SoloRol rol="client"><Bienvenida /></SoloRol>} />
         </Route>

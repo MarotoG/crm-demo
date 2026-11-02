@@ -222,3 +222,106 @@ def test_borrar_al_autor_conserva_el_contacto(usuarios, db):
 
     contacto = db.get(Contact, contacto_id)
     assert contacto is not None and contacto.created_by_id is None
+
+
+# --- Lista y búsqueda (T12) ----------------------------------------------------------
+
+
+def guardar(db, *contactos: tuple[str, str, str | None, str | None]) -> list[int]:
+    """Inserta contactos directamente (nombre, apellidos, email, teléfono) y devuelve sus id en orden."""
+    filas = [Contact(first_name=n, last_name=a, email=e, phone=t, source="other") for n, a, e, t in contactos]
+    db.add_all(filas)
+    db.flush()
+    return [f.id for f in filas]
+
+
+def listar(q: str | None = None, role: Role = Role.RECEPTION):
+    client, _ = sesion_de(role)
+    return client.get("/api/contacts", params=None if q is None else {"q": q})
+
+
+@pytest.mark.parametrize("role", [Role.RECEPTION, Role.ADMIN])
+def test_recepcion_y_admin_ven_la_lista_del_mas_reciente_al_mas_antiguo(usuarios, db, role):
+    ids = guardar(db, ("Ana", "Smith", "ana@x.com", None), ("Luis", "Pérez", None, "+12125550123"))
+
+    response = listar(role=role)
+
+    assert response.status_code == 200
+    datos = response.json()
+    assert datos["total"] == 2
+    assert [c["id"] for c in datos["items"]] == ids[::-1]
+    assert set(datos["items"][0]) == {"id", "first_name", "last_name", "email", "phone", "source", "status", "created_at"}
+
+
+@pytest.mark.parametrize("role", [Role.PROFESSIONAL, Role.CLIENT])
+def test_profesional_y_cliente_no_ven_la_lista(usuarios, db, role):
+    guardar(db, ("Ana", "Smith", "ana@x.com", None))
+
+    response = listar(role=role)
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "Permiso denegado"}
+
+
+def test_la_lista_trae_20_y_el_total_real(usuarios, db):
+    ids = guardar(db, *[(f"Ana{i}", "Smith", f"a{i}@x.com", None) for i in range(25)])
+
+    datos = listar().json()
+
+    assert datos["total"] == 25
+    assert [c["id"] for c in datos["items"]] == ids[::-1][:20]
+
+
+def test_el_total_cuenta_todos_los_que_cumplen_la_busqueda(usuarios, db):
+    guardar(db, *[(f"Ana{i}", "Smith", f"a{i}@x.com", None) for i in range(22)], ("Luis", "Pérez", "l@x.com", None))
+
+    datos = listar("ana").json()
+
+    assert datos["total"] == 22
+    assert len(datos["items"]) == 20
+
+
+@pytest.mark.parametrize(
+    "q",
+    ["jose", "JOSÉ", "José", "perez", "José Pérez", "  perez   jose ", "jose.p@clin", "(212) 555-01", "+1 212", "5550123"],
+    ids=["sin tilde", "mayúsculas", "tilde suelta", "apellido", "nombre completo", "al revés y con espacios",
+         "parte del email", "teléfono con formato", "teléfono con prefijo", "final del teléfono"],
+)
+def test_la_busqueda_encuentra_por_nombre_email_o_telefono(usuarios, db, q):
+    jose, _ = guardar(db, ("José", "Pérez", "jose.p@clinica.example.com", "+12125550123"), ("Ana", "Smith", "ana@x.com", "+34612345678"))
+
+    datos = listar(q).json()
+
+    assert [c["id"] for c in datos["items"]] == [jose]
+    assert datos["total"] == 1
+
+
+@pytest.mark.parametrize(
+    "q",
+    ["%", "_", "\\", "nadie", "21"],
+    ids=["% literal", "_ literal", "barra invertida", "sin coincidencias", "menos de 3 cifras"],
+)
+def test_la_busqueda_no_devuelve_de_mas(usuarios, db, q):
+    guardar(db, ("José", "Pérez", "jose@x.com", "+12125550123"), ("Ana", "Smith", "ana@x.com", None))
+
+    datos = listar(q).json()
+
+    assert datos == {"total": 0, "items": []}
+
+
+def test_busqueda_vacia_o_solo_espacios_devuelve_todos(usuarios, db):
+    guardar(db, ("José", "Pérez", "jose@x.com", None), ("Ana", "Smith", "ana@x.com", None))
+
+    assert listar("   ").json()["total"] == 2
+
+
+def test_busqueda_demasiado_larga_422(usuarios, db):
+    assert listar("a" * 101).status_code == 422
+    assert listar("a" * 100).status_code == 200
+
+
+def test_lo_creado_por_la_api_aparece_el_primero_en_la_lista(usuarios, db):
+    guardar(db, ("Luis", "Pérez", "l@x.com", None))
+    creado = crear(ANA).json()
+
+    assert listar().json()["items"][0] == creado

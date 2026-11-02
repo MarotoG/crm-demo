@@ -24,6 +24,7 @@ beforeEach(() => {
     "GET /api/health": () => ({ status: 200, cuerpo: { status: "ok" } }),
     "GET /api/health/db": () => ({ status: 200, cuerpo: { status: "ok", database: "ok" } }),
     "GET /api/auth/me": () => ({ status: 401, cuerpo: { detail: "No autenticado" } }),
+    "GET /api/contacts": () => ({ status: 200, cuerpo: { total: 0, items: [] } }), // T12: recepción y admin la piden
   };
   vi.stubGlobal(
     "fetch",
@@ -94,7 +95,7 @@ describe("login", () => {
 
     await rellenarLogin();
 
-    expect(await screen.findByRole("heading", { name: "Área de recepción" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Contactos" })).toBeTruthy();
     const login = llamadas.find((l) => l.clave === "POST /api/auth/login");
     expect(login?.cuerpo).toEqual({ email: RECEPCION.email, password: "contraseña-larga" });
     expect(login?.headers["X-CSRF-Token"]).toBeUndefined(); // el login no lleva token
@@ -128,7 +129,7 @@ describe("login", () => {
     conSesion(RECEPCION);
     abrir("/");
 
-    expect(await screen.findByRole("heading", { name: "Área de recepción" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Contactos" })).toBeTruthy();
     expect(screen.getByText(/recepcion@prueba\.example\.com · Recepción/)).toBeTruthy();
   });
 });
@@ -208,7 +209,7 @@ describe("cerrar sesión", () => {
     await userEvent.setup().click(await screen.findByRole("button", { name: "Cerrar sesión" }));
 
     expect((await screen.findByRole("alert")).textContent).toMatch(/^No se pudo cerrar la sesión/);
-    expect(screen.getByRole("heading", { name: "Área de recepción" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Contactos" })).toBeTruthy();
   });
 
   it("con un token CSRF desfasado (403), pide uno nuevo y reintenta una vez", async () => {

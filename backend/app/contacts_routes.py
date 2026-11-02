@@ -1,12 +1,19 @@
-"""Contactos (T11): por ahora solo el alta, para administración y recepción."""
+"""Contactos: alta (T11) y lista con búsqueda (T12), para administración y recepción.
+
+El profesional verá solo los contactos con alguna cita con él cuando existan las citas;
+hasta entonces recibe 403, igual que el cliente.
+"""
 
 import logging
+import re
 from collections.abc import Callable
 from datetime import datetime
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 from pydantic_core import PydanticCustomError
+from sqlalchemy import ColumnElement, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -24,6 +31,12 @@ DUPLICATE_MESSAGES = {
     "uq_contacts_name_email": "Ya existe un contacto con ese nombre, apellidos y email",
     "uq_contacts_name_phone": "Ya existe un contacto con ese nombre, apellidos y teléfono",
 }
+
+# Lista (decisión T12): los 20 más recientes que cumplan la búsqueda, más el total.
+LIST_LIMIT = 20
+MAX_SEARCH_LENGTH = 100
+# Con menos cifras, buscar «1» o «55» en los teléfonos devolvería casi todo.
+MIN_PHONE_DIGITS = 3
 
 
 def _user_message(normalize: Callable[[str], str]) -> Callable[[str], str]:
@@ -90,6 +103,49 @@ class ContactOut(BaseModel):
     source: str
     status: str
     created_at: datetime
+
+
+class ContactList(BaseModel):
+    """Una página de resultados: `total` cuenta todos los que cumplen la búsqueda."""
+
+    total: int
+    items: list[ContactOut]
+
+
+def _search_condition(q: str) -> ColumnElement[bool]:
+    """Coincidencia parcial en nombre y apellidos (en cualquier orden), email o teléfono.
+
+    Sin distinguir mayúsculas ni tildes (unaccent, migración dc66ba7eb339). El texto va como
+    parámetro, nunca pegado al SQL; % y _ se escapan para que se busquen literalmente.
+    """
+    escaped = re.sub(r"([\\%_])", r"\\\1", q)
+    pattern = func.unaccent(f"%{escaped}%")
+    conditions = [
+        func.unaccent(Contact.first_name + " " + Contact.last_name).ilike(pattern, escape="\\"),
+        func.unaccent(Contact.last_name + " " + Contact.first_name).ilike(pattern, escape="\\"),
+        func.unaccent(Contact.email).ilike(pattern, escape="\\"),
+    ]
+    # Teléfono: solo las cifras, para que «(212) 555» encuentre +12125550123.
+    digits = "".join(c for c in q if c.isascii() and c.isdigit())
+    if len(digits) >= MIN_PHONE_DIGITS:
+        conditions.append(Contact.phone.contains(digits, autoescape=True))
+    return or_(*conditions)
+
+
+@router.get("")
+def list_contacts(
+    _user: User = Depends(require_roles(Role.ADMIN, Role.RECEPTION)),
+    db: Session = Depends(get_db),
+    q: Annotated[str, Query(max_length=MAX_SEARCH_LENGTH)] = "",
+) -> ContactList:
+    # Espacios de más fuera, como al guardar. La tilde suelta («e» + tilde) ya la quita unaccent.
+    q = " ".join(q.split())
+    query = select(Contact)
+    if q:
+        query = query.where(_search_condition(q))
+    total = db.scalar(select(func.count()).select_from(query.subquery()))
+    contacts = db.scalars(query.order_by(Contact.created_at.desc(), Contact.id.desc()).limit(LIST_LIMIT))
+    return ContactList(total=total, items=[ContactOut.model_validate(c, from_attributes=True) for c in contacts])
 
 
 @router.post(

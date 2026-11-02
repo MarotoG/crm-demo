@@ -1,4 +1,4 @@
-// Llamadas a la API: salud del sistema (T06) y sesión y usuarios (T10). Las rutas son
+// Llamadas a la API: salud del sistema (T06), sesión y usuarios (T10) y contactos (T12). Las rutas son
 // relativas (/api/...): en desarrollo las reenvía el proxy de Vite y en producción nginx.
 
 export type EstadoSalud =
@@ -59,14 +59,22 @@ export type Usuario = { id: number; email: string; role: Rol; csrf_token: string
 
 export type UsuarioAdmin = { id: number; email: string; role: Rol; active: boolean };
 
-/** Error de una llamada: status es null si ni siquiera hubo respuesta (red, tiempo agotado). */
+/**
+ * Error de una llamada: status es null si ni siquiera hubo respuesta (red, tiempo agotado).
+ * En un 422, `campos` trae el mensaje de cada campo no válido (p. ej. { email: "…" }) y
+ * `general` los que no son de un campo concreto («Indica al menos un email o un teléfono»).
+ */
 export class ErrorApi extends Error {
   readonly status: number | null;
+  readonly campos: Record<string, string>;
+  readonly general: string[];
 
-  constructor(status: number | null, mensaje: string) {
+  constructor(status: number | null, mensaje: string, campos: Record<string, string> = {}, general: string[] = []) {
     super(mensaje);
     this.name = "ErrorApi";
     this.status = status;
+    this.campos = campos;
+    this.general = general;
   }
 }
 
@@ -96,16 +104,37 @@ async function peticion<T>(ruta: string, { method = "GET", cuerpo, csrf }: Opcio
     throw new ErrorApi(null, "No se pudo contactar con el servidor");
   }
 
-  if (!respuesta.ok) throw new ErrorApi(respuesta.status, await mensajeDeRespuesta(respuesta));
+  if (!respuesta.ok) throw await errorDeRespuesta(respuesta);
   if (respuesta.status === 204) return undefined as T;
   return (await respuesta.json()) as T;
 }
 
+async function errorDeRespuesta(respuesta: Response): Promise<ErrorApi> {
+  if (respuesta.status !== 422) return new ErrorApi(respuesta.status, await mensajeDeRespuesta(respuesta));
+  // 422 de FastAPI: detail = [{ loc: ["body", "email"], msg: "…" }, …]
+  const campos: Record<string, string> = {};
+  const general: string[] = [];
+  try {
+    const cuerpo: unknown = await respuesta.json();
+    const detalle = typeof cuerpo === "object" && cuerpo !== null && "detail" in cuerpo ? cuerpo.detail : null;
+    if (Array.isArray(detalle)) {
+      for (const error of detalle as { loc?: unknown[]; msg?: unknown }[]) {
+        if (typeof error.msg !== "string") continue;
+        const campo = error.loc?.length === 2 && typeof error.loc[1] === "string" ? error.loc[1] : null;
+        if (campo && !(campo in campos)) campos[campo] = error.msg;
+        else if (!campo) general.push(error.msg);
+      }
+    }
+  } catch {
+    // Sin cuerpo JSON: solo el mensaje genérico.
+  }
+  return new ErrorApi(422, "Revisa los datos introducidos", campos, general);
+}
+
 async function mensajeDeRespuesta(respuesta: Response): Promise<string> {
-  if (respuesta.status === 422) return "Revisa los datos introducidos";
   if (respuesta.status === 503) return "Servicio no disponible. Inténtalo de nuevo en unos minutos";
-  // 401, 403 y 429 traen un mensaje pensado para el usuario (p. ej. «Email o contraseña incorrectos»).
-  if ([401, 403, 429].includes(respuesta.status)) {
+  // 401, 403, 409 y 429 traen un mensaje pensado para el usuario (p. ej. «Email o contraseña incorrectos»).
+  if ([401, 403, 409, 429].includes(respuesta.status)) {
     try {
       const cuerpo: unknown = await respuesta.json();
       if (typeof cuerpo === "object" && cuerpo !== null && "detail" in cuerpo && typeof cuerpo.detail === "string") {
@@ -138,4 +167,40 @@ export function cerrarSesion(csrf: string): Promise<void> {
 
 export function listarUsuarios(): Promise<UsuarioAdmin[]> {
   return peticion<UsuarioAdmin[]>("/api/users");
+}
+
+// --- Contactos (T12) -----------------------------------------------------------
+
+export type OrigenContacto = "instagram" | "facebook" | "google" | "website" | "referral" | "walk_in" | "other";
+export type EstadoContacto = "new" | "contacted" | "scheduled" | "client" | "lost";
+
+export type Contacto = {
+  id: number;
+  first_name: string;
+  last_name: string;
+  email: string | null;
+  phone: string | null;
+  source: OrigenContacto;
+  status: EstadoContacto;
+  created_at: string;
+};
+
+export type ListaContactos = { total: number; items: Contacto[] };
+
+export type NuevoContacto = {
+  first_name: string;
+  last_name: string;
+  email: string;
+  phone: string;
+  source: OrigenContacto;
+};
+
+/** Los 20 más recientes que coinciden con `busqueda` (vacía: todos) y el total. */
+export function listarContactos(busqueda: string): Promise<ListaContactos> {
+  const q = busqueda.trim();
+  return peticion<ListaContactos>(q ? `/api/contacts?${new URLSearchParams({ q })}` : "/api/contacts");
+}
+
+export function crearContacto(datos: NuevoContacto, csrf: string): Promise<Contacto> {
+  return peticion<Contacto>("/api/contacts", { method: "POST", cuerpo: datos, csrf });
 }

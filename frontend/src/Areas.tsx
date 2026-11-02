@@ -6,6 +6,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Link, Navigate, Outlet } from "react-router";
 
 import { ErrorApi, listarUsuarios, type Rol, type UsuarioAdmin } from "./api";
+import Contactos from "./Contactos";
 import { AREA_DE, NOMBRE_ROL, useSesion } from "./sesion";
 
 /** Exige sesión: sin ella, al login. Con ella, la cabecera común y el área pedida. */
@@ -87,7 +88,7 @@ type EstadoLista =
   | { tipo: "error"; mensaje: string }
   | { tipo: "ok"; usuarios: UsuarioAdmin[] };
 
-/** Área de administración: la lista real de usuarios (GET /api/users, solo admin). */
+/** Área de administración: la lista real de usuarios (GET /api/users, solo admin) y los contactos (T12). */
 export function AreaAdmin() {
   const { caducada } = useSesion();
   const [lista, setLista] = useState<EstadoLista>({ tipo: "cargando" });
@@ -109,44 +110,47 @@ export function AreaAdmin() {
   }, [caducada, intento]);
 
   return (
-    <section className="tarjeta" aria-labelledby="titulo-usuarios">
-      <h2 id="titulo-usuarios">Usuarios</h2>
-      {lista.tipo === "cargando" && <p>Cargando usuarios…</p>}
-      {lista.tipo === "error" && (
-        <>
-          <p className="error" role="alert">
-            {lista.mensaje}
-          </p>
-          <button type="button" className="secundario" onClick={() => setIntento((n) => n + 1)}>
-            Reintentar
-          </button>
-        </>
-      )}
-      {lista.tipo === "ok" && (
-        <table className="tabla">
-          <thead>
-            <tr>
-              <th scope="col">Email</th>
-              <th scope="col">Rol</th>
-              <th scope="col">Estado</th>
-            </tr>
-          </thead>
-          <tbody>
-            {lista.usuarios.map((u) => (
-              <tr key={u.id}>
-                <td>{u.email}</td>
-                <td>{NOMBRE_ROL[u.role]}</td>
-                <td>{u.active ? "Activa" : "Desactivada"}</td>
+    <>
+      <section className="tarjeta" aria-labelledby="titulo-usuarios">
+        <h2 id="titulo-usuarios">Usuarios</h2>
+        {lista.tipo === "cargando" && <p>Cargando usuarios…</p>}
+        {lista.tipo === "error" && (
+          <>
+            <p className="error" role="alert">
+              {lista.mensaje}
+            </p>
+            <button type="button" className="secundario" onClick={() => setIntento((n) => n + 1)}>
+              Reintentar
+            </button>
+          </>
+        )}
+        {lista.tipo === "ok" && (
+          <table className="tabla">
+            <thead>
+              <tr>
+                <th scope="col">Email</th>
+                <th scope="col">Rol</th>
+                <th scope="col">Estado</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </section>
+            </thead>
+            <tbody>
+              {lista.usuarios.map((u) => (
+                <tr key={u.id}>
+                  <td>{u.email}</td>
+                  <td>{NOMBRE_ROL[u.role]}</td>
+                  <td>{u.active ? "Activa" : "Desactivada"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+      <Contactos />
+    </>
   );
 }
 
-/** Áreas de recepción, profesional y cliente: de momento, solo la bienvenida. */
+/** Áreas de profesional y cliente: de momento, solo la bienvenida. */
 export function Bienvenida() {
   const { estado } = useSesion();
   if (estado.tipo !== "dentro") return null;
