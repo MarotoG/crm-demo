@@ -1,6 +1,6 @@
 # crm-demo — CRM para pequeñas clínicas estéticas
 
-> **Estado: en desarrollo (Trabajo Fin de Máster, entrega noviembre de 2026).** Por ahora existen el esqueleto de la API, PostgreSQL en Docker, las migraciones de servicios y usuarios, un procedimiento para crear las cuentas de demo, login y logout con sesión en servidor, protección CSRF y un primer permiso por rol, por API (todavía sin pantalla de login) y una interfaz mínima que muestra el estado de la API y de la base de datos; todavía sin funcionalidades del CRM. Este README es provisional y se completará con hechos comprobados a medida que avance el proyecto.
+> **Estado: en desarrollo (Trabajo Fin de Máster, entrega noviembre de 2026).** Por ahora existen el esqueleto de la API, PostgreSQL en Docker, las migraciones de servicios y usuarios, un procedimiento para crear las cuentas de demo, login y logout con sesión en servidor y protección CSRF, y una interfaz con pantalla de login, un área por rol (la de administración lista los usuarios) y el estado de la API y de la base de datos; todavía sin funcionalidades del CRM (contactos, agenda, portal). Este README es provisional y se completará con hechos comprobados a medida que avance el proyecto.
 
 ## Descripción
 
@@ -108,9 +108,12 @@ cd frontend
 npm ci              # instala exactamente lo que fija package-lock.json
 npm run dev         # http://127.0.0.1:5173 (Ctrl+C para parar)
 npm run build       # comprueba tipos (tsc) y genera dist/
+npm test            # pruebas de la interfaz (Vitest + Testing Library; no necesitan la API)
 ```
 
-En desarrollo el navegador solo habla con Vite (puerto 5173), que reenvía `/api/*` a la API (puerto 8000). La página muestra si la API y la base de datos están disponibles, y un error comprensible si no lo están.
+En desarrollo el navegador solo habla con Vite (puerto 5173), que reenvía `/api/*` a la API (puerto 8000).
+
+Al abrir `http://127.0.0.1:5173` aparece la pantalla de login, con el estado de la API y de la base de datos debajo. Al entrar, cada rol va a su área: `/admin` (lista de usuarios), `/recepcion`, `/profesional` y `/portal` (por ahora, una bienvenida). Escribir a mano el área de otro rol muestra «No tienes acceso a esta área», y la API rechaza igualmente sus datos (403). «Cerrar sesión» solo vuelve al login cuando la API confirma el cierre. Si la sesión caduca mientras se usa, vuelve al login con un aviso. Recargar la página mantiene la sesión: la app pregunta a `/api/auth/me` y guarda el token CSRF solo en memoria.
 
 ### 5. Cuentas de demostración (local)
 
@@ -130,7 +133,7 @@ Hay una cuenta ficticia por rol, con email del dominio reservado `demo.example.c
 .venv\Scripts\python.exe -m app.seed_demo
 ```
 
-El comando se puede repetir: crea las cuentas que falten y, en las existentes, aplica la contraseña actual del `.env`, restaura el rol y las reactiva. Si falta alguna variable o es demasiado corta, no modifica la BD y dice cuál. Nunca muestra contraseñas ni hashes. Todavía no hay pantalla de login; las credenciales de prueba de la entrega se documentarán al terminarla.
+El comando se puede repetir: crea las cuentas que falten y, en las existentes, aplica la contraseña actual del `.env`, restaura el rol y las reactiva. Si falta alguna variable o es demasiado corta, no modifica la BD y dice cuál. Nunca muestra contraseñas ni hashes. Con las cuentas creadas se puede entrar desde la pantalla de login; las credenciales de prueba de la entrega se documentarán antes de entregar.
 
 ## Pendiente de completar
 

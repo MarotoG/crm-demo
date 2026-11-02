@@ -1,5 +1,6 @@
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
+// defineConfig de vitest/config: la misma configuración de Vite más la sección test.
+import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   plugins: [react()],
@@ -13,5 +14,10 @@ export default defineConfig({
     proxy: {
       "/api": "http://127.0.0.1:8000",
     },
+  },
+  test: {
+    // Las pruebas (Vitest + Testing Library) usan un DOM simulado y una API falsa:
+    // no necesitan el backend ni el navegador.
+    environment: "jsdom",
   },
 });
