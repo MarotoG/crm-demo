@@ -223,6 +223,38 @@ select:focus-visible {
   font-weight: 600;
 }
 
+/* Ficha de contacto (T13): en móvil, cada dato bajo su nombre; en pantallas anchas, en fila. */
+.ficha {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.125rem 1rem;
+  margin: 0 0 1rem;
+}
+
+.ficha dt {
+  font-weight: 600;
+  margin-top: 0.5rem;
+}
+
+.aviso + .ficha {
+  margin-top: 0.75rem;
+}
+
+.ficha dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (min-width: 30rem) {
+  .ficha {
+    grid-template-columns: max-content 1fr;
+  }
+
+  .ficha dt {
+    margin-top: 0;
+  }
+}
+
 /* Mensajes cortos bajo un campo (errores y aviso de tildes, T12b). */
 .campo .error,
 .aviso-campo {

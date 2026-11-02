@@ -1,4 +1,4 @@
-"""Contactos contra PostgreSQL real: alta (T11), lista y búsqueda (T12), sin tildes (T12b)."""
+"""Contactos contra PostgreSQL real: alta (T11), lista y búsqueda (T12), sin tildes (T12b), ficha y edición (T13)."""
 
 import pytest
 from fastapi.testclient import TestClient
@@ -332,3 +332,147 @@ def test_lo_creado_por_la_api_aparece_el_primero_en_la_lista(usuarios, db):
     creado = crear(ANA).json()
 
     assert listar().json()["items"][0] == creado
+
+
+# --- Ficha y edición (T13) -------------------------------------------------------------
+
+VERSION_CONFLICT = {"detail": "Otra persona ha cambiado esta ficha mientras la editabas"}
+
+
+def ver(contact_id: int, role: Role = Role.RECEPTION):
+    client, _ = sesion_de(role)
+    return client.get(f"/api/contacts/{contact_id}")
+
+
+def editar(contact_id: int, datos: dict, role: Role = Role.RECEPTION):
+    client, csrf = sesion_de(role)
+    return client.put(f"/api/contacts/{contact_id}", json=datos, headers=csrf)
+
+
+def ficha_de_ana(**cambios) -> dict:
+    """Lo que enviaría el formulario de edición: la ficha entera y la versión leída."""
+    return {**ANA, "phone": None, "version": 1, **cambios}
+
+
+@pytest.mark.parametrize("role", [Role.RECEPTION, Role.ADMIN])
+def test_recepcion_y_admin_ven_la_ficha(usuarios, db, role):
+    creado = crear(ANA).json()
+
+    response = ver(creado["id"], role)
+
+    assert response.status_code == 200
+    assert response.json() | {"created_at": "", "updated_at": ""} == {
+        **creado, "created_at": "", "updated_at": "", "version": 1,
+        "created_by_email": "reception@prueba.example.com", "updated_by_email": None,
+    }
+
+
+@pytest.mark.parametrize("role", [Role.PROFESSIONAL, Role.CLIENT])
+def test_profesional_y_cliente_no_ven_ni_editan_la_ficha(usuarios, db, role):
+    contacto_id = crear(ANA).json()["id"]
+
+    assert ver(contacto_id, role).status_code == 403
+    assert editar(contacto_id, ficha_de_ana(first_name="Eva"), role).status_code == 403
+    assert db.get(Contact, contacto_id).first_name == "Ana"
+
+
+def test_ficha_que_no_existe_404(usuarios, db):
+    assert ver(999999).json() == {"detail": "Contacto no encontrado"}
+    assert ver(999999).status_code == 404
+    assert editar(999999, ficha_de_ana()).status_code == 404
+
+
+@pytest.mark.parametrize("role", [Role.RECEPTION, Role.ADMIN])
+def test_editar_conserva_el_id_normaliza_y_sube_la_version(usuarios, db, role):
+    creado = crear(ANA).json()
+
+    response = editar(creado["id"], ficha_de_ana(first_name="  Anna ", email=None, phone="(212) 555-0123", source="google"), role)
+
+    assert response.status_code == 200
+    datos = response.json()
+    assert (datos["id"], datos["first_name"], datos["email"], datos["phone"], datos["source"]) == (
+        creado["id"], "Anna", None, "+12125550123", "google",
+    )
+    assert datos["version"] == 2
+    assert datos["status"] == "new"  # el estado no se toca (T14)
+    assert datos["created_by_email"] == "reception@prueba.example.com"
+    assert datos["updated_by_email"] == f"{role.value}@prueba.example.com"
+    lista = listar().json()
+    assert lista["total"] == 1 and lista["items"][0]["id"] == creado["id"]  # misma ficha, no otra
+
+
+def test_dos_ediciones_con_la_misma_version_la_segunda_409(usuarios, db):
+    contacto_id = crear(ANA).json()["id"]
+
+    primera = editar(contacto_id, ficha_de_ana(first_name="Anna"))
+    segunda = editar(contacto_id, ficha_de_ana(last_name="Smyth"), Role.ADMIN)  # leyó la versión 1
+
+    assert primera.status_code == 200
+    assert segunda.status_code == 409
+    assert segunda.json() == VERSION_CONFLICT
+    contacto = db.get(Contact, contacto_id, populate_existing=True)
+    assert (contacto.first_name, contacto.last_name, contacto.version) == ("Anna", "Smith", 2)
+
+
+def test_con_la_version_nueva_se_puede_volver_a_editar(usuarios, db):
+    contacto_id = crear(ANA).json()["id"]
+    editar(contacto_id, ficha_de_ana(first_name="Anna"))
+
+    response = editar(contacto_id, ficha_de_ana(first_name="Anna", last_name="Smyth", version=2))
+
+    assert response.status_code == 200
+    assert response.json()["version"] == 3
+
+
+def test_guardar_sin_cambios_no_choca_consigo_misma(usuarios, db):
+    contacto_id = crear(ANA).json()["id"]
+
+    assert editar(contacto_id, ficha_de_ana()).status_code == 200
+
+
+def test_la_edicion_que_crea_un_duplicado_409_y_no_cambia_nada(usuarios, db):
+    crear({**ANA, "first_name": "Laura"})
+    ana_id = crear(ANA).json()["id"]
+
+    response = editar(ana_id, ficha_de_ana(first_name="LAURA"))
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Ya existe un contacto con ese nombre, apellidos y email"}
+    contacto = db.get(Contact, ana_id, populate_existing=True)
+    assert (contacto.first_name, contacto.version) == ("Ana", 1)
+
+
+@pytest.mark.parametrize(
+    "cambio",
+    [
+        {"first_name": "Jos\u00e9"},
+        {"email": None, "phone": None},
+        {"status": "client"},
+        {"created_by_id": 1},
+        {"version": 0},
+        {"version": None},
+    ],
+    ids=["con tilde", "sin email ni teléfono", "fijar estado", "fijar autor", "versión 0", "sin versión"],
+)
+def test_edicion_no_valida_422_y_no_cambia_nada(usuarios, db, cambio):
+    contacto_id = crear(ANA).json()["id"]
+
+    response = editar(contacto_id, {**ficha_de_ana(), **cambio})
+
+    assert response.status_code == 422
+    assert db.get(Contact, contacto_id, populate_existing=True).version == 1
+
+
+def test_editar_sin_token_csrf_403(usuarios, db):
+    contacto_id = crear(ANA).json()["id"]
+    client, _ = sesion_de(Role.RECEPTION)
+
+    assert client.put(f"/api/contacts/{contacto_id}", json=ficha_de_ana(first_name="Eva")).status_code == 403
+    assert db.get(Contact, contacto_id, populate_existing=True).first_name == "Ana"
+
+
+def test_la_bd_rechaza_una_version_menor_que_1(db):
+    db.execute(text("INSERT INTO contacts (first_name, last_name, email, source) VALUES ('Ana', 'Smith', 'a@x.com', 'google')"))
+
+    with pytest.raises(IntegrityError, match="ck_contacts_version_positive"), db.begin_nested():
+        db.execute(text("UPDATE contacts SET version = 0"))

@@ -78,7 +78,7 @@ export class ErrorApi extends Error {
   }
 }
 
-type Opciones = { method?: "GET" | "POST"; cuerpo?: unknown; csrf?: string };
+type Opciones = { method?: "GET" | "POST" | "PUT"; cuerpo?: unknown; csrf?: string };
 
 // Única puerta de salida hacia la API: añade X-CSRF-Token a lo que cambia datos y
 // convierte cualquier fallo en un ErrorApi con un mensaje comprensible.
@@ -203,4 +203,25 @@ export function listarContactos(busqueda: string): Promise<ListaContactos> {
 
 export function crearContacto(datos: NuevoContacto, csrf: string): Promise<Contacto> {
   return peticion<Contacto>("/api/contacts", { method: "POST", cuerpo: datos, csrf });
+}
+
+/** La ficha (T13): `version` es la que hay que devolver al editar (bloqueo optimista). */
+export type ContactoDetalle = Contacto & {
+  version: number;
+  updated_at: string;
+  created_by_email: string | null;
+  updated_by_email: string | null;
+};
+
+export function obtenerContacto(id: number): Promise<ContactoDetalle> {
+  return peticion<ContactoDetalle>(`/api/contacts/${id}`);
+}
+
+/** PUT con la ficha entera y la versión leída: 409 si otra persona guardó antes. */
+export function actualizarContacto(
+  id: number,
+  datos: NuevoContacto & { version: number },
+  csrf: string,
+): Promise<ContactoDetalle> {
+  return peticion<ContactoDetalle>(`/api/contacts/${id}`, { method: "PUT", cuerpo: datos, csrf });
 }

@@ -1,4 +1,5 @@
-"""Contactos: alta (T11) y lista con búsqueda (T12), para administración y recepción.
+"""Contactos: alta (T11), lista con búsqueda (T12) y ficha con edición (T13), para
+administración y recepción.
 
 El profesional verá solo los contactos con alguna cita con él cuando existan las citas;
 hasta entonces recibe 403, igual que el cliente.
@@ -11,9 +12,9 @@ from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_core import PydanticCustomError
-from sqlalchemy import ColumnElement, func, or_, select
+from sqlalchemy import ColumnElement, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -31,6 +32,8 @@ DUPLICATE_MESSAGES = {
     "uq_contacts_name_email": "Ya existe un contacto con ese nombre, apellidos y email",
     "uq_contacts_name_phone": "Ya existe un contacto con ese nombre, apellidos y teléfono",
 }
+VERSION_CONFLICT_MESSAGE = "Otra persona ha cambiado esta ficha mientras la editabas"
+NOT_FOUND_MESSAGE = "Contacto no encontrado"
 
 # Lista (decisión T12): los 20 más recientes que cumplan la búsqueda, más el total.
 LIST_LIMIT = 20
@@ -94,6 +97,13 @@ class ContactCreate(BaseModel):
         return self
 
 
+class ContactUpdate(ContactCreate):
+    """Edición (T13): la ficha entera (PUT) con las mismas reglas que el alta, más la versión
+    que se leyó. El estado y el responsable se cambian en T14; el autor y las fechas, nunca."""
+
+    version: int = Field(ge=1)
+
+
 class ContactOut(BaseModel):
     id: int
     first_name: str
@@ -103,6 +113,38 @@ class ContactOut(BaseModel):
     source: str
     status: str
     created_at: datetime
+
+
+class ContactDetail(ContactOut):
+    """La ficha (T13): además, la versión para editar y quién creó y cambió por última vez."""
+
+    version: int
+    updated_at: datetime
+    created_by_email: str | None
+    updated_by_email: str | None
+
+
+def _detail(db: Session, contact: Contact) -> ContactDetail:
+    def email_of(user_id: int | None) -> str | None:
+        # None si no consta o si esa cuenta se borró (ON DELETE SET NULL).
+        user = db.get(User, user_id) if user_id is not None else None
+        return user.email if user else None
+
+    return ContactDetail(
+        **ContactOut.model_validate(contact, from_attributes=True).model_dump(),
+        version=contact.version,
+        updated_at=contact.updated_at,
+        created_by_email=email_of(contact.created_by_id),
+        updated_by_email=email_of(contact.updated_by_id),
+    )
+
+
+def _duplicate_or_raise(error: IntegrityError) -> HTTPException:
+    """409 si ha saltado un índice de duplicados; cualquier otro error de integridad sigue su curso."""
+    constraint = getattr(getattr(error.orig, "diag", None), "constraint_name", None)
+    if constraint in DUPLICATE_MESSAGES:
+        return HTTPException(status.HTTP_409_CONFLICT, DUPLICATE_MESSAGES[constraint])
+    raise error
 
 
 class ContactList(BaseModel):
@@ -166,10 +208,63 @@ def create_contact(
         db.commit()
     except IntegrityError as error:
         db.rollback()
-        constraint = getattr(getattr(error.orig, "diag", None), "constraint_name", None)
-        if constraint in DUPLICATE_MESSAGES:
-            raise HTTPException(status.HTTP_409_CONFLICT, DUPLICATE_MESSAGES[constraint]) from None
-        raise
+        raise _duplicate_or_raise(error) from None
     db.refresh(contact)
     logger.info("Contacto creado: id=%s por user_id=%s", contact.id, user.id)
     return ContactOut.model_validate(contact, from_attributes=True)
+
+
+@router.get("/{contact_id}", responses={404: {"description": "Contacto no encontrado"}})
+def get_contact(
+    contact_id: int,
+    _user: User = Depends(require_roles(Role.ADMIN, Role.RECEPTION)),
+    db: Session = Depends(get_db),
+) -> ContactDetail:
+    contact = db.get(Contact, contact_id)
+    if contact is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND_MESSAGE)
+    return _detail(db, contact)
+
+
+@router.put(
+    "/{contact_id}",
+    dependencies=[Depends(require_csrf)],
+    responses={
+        404: {"description": "Contacto no encontrado"},
+        409: {"description": "Otra persona guardó antes (versión distinta) o la edición crea un duplicado"},
+    },
+)
+def update_contact(
+    contact_id: int,
+    body: ContactUpdate,
+    user: User = Depends(require_roles(Role.ADMIN, Role.RECEPTION)),
+    db: Session = Depends(get_db),
+) -> ContactDetail:
+    # Bloqueo optimista en una sola sentencia: solo se actualiza si la versión sigue siendo la
+    # que leyó quien edita. Con dos ediciones a la vez, PostgreSQL bloquea la fila: la segunda
+    # espera, vuelve a mirar la versión (ya subida) y no actualiza nada.
+    statement = (
+        update(Contact)
+        .where(Contact.id == contact_id, Contact.version == body.version)
+        .values(
+            **body.model_dump(exclude={"version"}),
+            version=Contact.version + 1,
+            updated_by_id=user.id,
+            updated_at=func.now(),
+        )
+        .returning(Contact.id)
+    )
+    try:
+        updated = db.execute(statement).scalar_one_or_none()
+    except IntegrityError as error:
+        db.rollback()
+        raise _duplicate_or_raise(error) from None
+    if updated is None:
+        db.rollback()
+        if db.get(Contact, contact_id) is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND_MESSAGE)
+        raise HTTPException(status.HTTP_409_CONFLICT, VERSION_CONFLICT_MESSAGE)
+    db.commit()
+    contact = db.get(Contact, contact_id, populate_existing=True)
+    logger.info("Contacto editado: id=%s por user_id=%s, versión %s", contact.id, user.id, contact.version)
+    return _detail(db, contact)

@@ -3,6 +3,7 @@
 // decide la API (403 para profesional y cliente); aquí solo se muestra.
 
 import { useEffect, useState, type FormEvent } from "react";
+import { Link } from "react-router";
 
 import {
   crearContacto,
@@ -14,7 +15,7 @@ import {
   type NuevoContacto,
   type OrigenContacto,
 } from "./api";
-import { useSesion } from "./sesion";
+import { AREA_DE, useSesion } from "./sesion";
 
 /** Espera tras la última tecla antes de buscar: no se lanza una petición por letra. */
 export const PAUSA_BUSQUEDA_MS = 300;
@@ -51,7 +52,16 @@ export function formatoTelefono(telefono: string): string {
   return eeuu ? `(${eeuu[1]}) ${eeuu[2]}-${eeuu[3]}` : telefono;
 }
 
-type EstadoLista = { tipo: "cargando" } | { tipo: "error"; mensaje: string } | { tipo: "ok"; lista: ListaContactos };
+// Zona de la clínica (decisión T03): las fechas se muestran en su hora, y se dice cuál es.
+export const ZONA_CLINICA = "America/New_York";
+const FORMATO_FECHA = new Intl.DateTimeFormat("es-ES", { dateStyle: "short", timeStyle: "short", timeZone: ZONA_CLINICA });
+
+/** 2026-11-02T23:05:00Z → «2/11/26, 18:05 (hora de Nueva York)». */
+export function formatoFecha(iso: string): string {
+  return `${FORMATO_FECHA.format(new Date(iso))} (hora de Nueva York)`;
+}
+
+type EstadoLista ={ tipo: "cargando" } | { tipo: "error"; mensaje: string } | { tipo: "ok"; lista: ListaContactos };
 
 export default function Contactos() {
   const { caducada } = useSesion();
@@ -103,7 +113,7 @@ export default function Contactos() {
       )}
 
       {formularioAbierto ? (
-        <FormularioContacto alCrear={alCrear} alCancelar={() => setFormularioAbierto(false)} />
+        <FormularioContacto guardar={crearContacto} alGuardar={alCrear} alCancelar={() => setFormularioAbierto(false)} />
       ) : (
         <button
           type="button"
@@ -150,6 +160,9 @@ export default function Contactos() {
 }
 
 function ListaDeContactos({ lista, busqueda }: { lista: ListaContactos; busqueda: string }) {
+  const { estado } = useSesion();
+  // Cada nombre abre su ficha (T13) dentro del área de quien la mira: /recepcion o /admin.
+  const area = estado.tipo === "dentro" ? AREA_DE[estado.usuario.role] : "";
   if (lista.items.length === 0) {
     return (
       <p>
@@ -169,9 +182,9 @@ function ListaDeContactos({ lista, busqueda }: { lista: ListaContactos; busqueda
       <ul className="contactos">
         {lista.items.map((c) => (
           <li key={c.id} className="contacto">
-            <span className="contacto__nombre">
+            <Link className="contacto__nombre" to={`${area}/contactos/${c.id}`}>
               {c.first_name} {c.last_name}
-            </span>
+            </Link>
             <span className="contacto__datos">
               {[c.email, c.phone && formatoTelefono(c.phone)].filter(Boolean).join(" · ")}
             </span>
@@ -199,9 +212,32 @@ const ETIQUETAS: Record<Campo, string> = {
 
 const CAMPOS_SIN_TILDES: Campo[] = ["first_name", "last_name", "email"];
 
-function FormularioContacto({ alCrear, alCancelar }: { alCrear: (c: Contacto) => void; alCancelar: () => void }) {
+export type DatosFormulario = typeof VACIO;
+
+/**
+ * Formulario de contacto para el alta (T12) y la edición (T13): mismos campos y mismas
+ * comprobaciones; quien lo usa decide qué hace al guardar (`guardar`) y con el resultado.
+ */
+export function FormularioContacto<T>({
+  titulo = "Nuevo contacto",
+  textoGuardar = "Guardar contacto",
+  inicial = VACIO,
+  guardar,
+  alGuardar,
+  alCancelar,
+  alConflicto,
+}: {
+  titulo?: string;
+  textoGuardar?: string;
+  inicial?: DatosFormulario;
+  guardar: (datos: NuevoContacto, csrf: string) => Promise<T>;
+  alGuardar: (resultado: T) => void;
+  alCancelar: () => void;
+  /** Ante un 409, devuelve true si quien usa el formulario lo ha resuelto (otra versión, T13). */
+  alConflicto?: () => Promise<boolean>;
+}) {
   const { estado, caducada } = useSesion();
-  const [datos, setDatos] = useState(VACIO);
+  const [datos, setDatos] = useState(inicial);
   const [errores, setErrores] = useState<Partial<Record<Campo, string>>>({});
   const [general, setGeneral] = useState<string[]>([]);
   const [guardando, setGuardando] = useState(false);
@@ -224,7 +260,7 @@ function FormularioContacto({ alCrear, alCancelar }: { alCrear: (c: Contacto) =>
     setGuardando(true);
     try {
       const nuevo: NuevoContacto = { ...datos, source: datos.source };
-      alCrear(await crearContacto(nuevo, csrf));
+      alGuardar(await guardar(nuevo, csrf));
     } catch (error) {
       setGuardando(false);
       if (!(error instanceof ErrorApi)) return setGeneral(["Error inesperado"]);
@@ -234,6 +270,7 @@ function FormularioContacto({ alCrear, alCancelar }: { alCrear: (c: Contacto) =>
         setGeneral(error.general.length || Object.keys(error.campos).length ? error.general : [error.message]);
         return;
       }
+      if (error.status === 409 && alConflicto && (await alConflicto())) return;
       setGeneral([error.message]); // 409 duplicado, 403, 503, sin conexión…
     }
   }
@@ -272,7 +309,7 @@ function FormularioContacto({ alCrear, alCancelar }: { alCrear: (c: Contacto) =>
   }
 
   return (
-    <form className="formulario" onSubmit={enviar} noValidate aria-label="Nuevo contacto">
+    <form className="formulario" onSubmit={enviar} noValidate aria-label={titulo}>
       {campo("first_name", "text", "off")}
       {campo("last_name", "text", "off")}
       {campo("email", "email", "off")}
@@ -307,7 +344,7 @@ function FormularioContacto({ alCrear, alCancelar }: { alCrear: (c: Contacto) =>
       ))}
       <div className="acciones">
         <button type="submit" disabled={guardando}>
-          {guardando ? "Guardando…" : "Guardar contacto"}
+          {guardando ? "Guardando…" : textoGuardar}
         </button>
         <button type="button" className="secundario" onClick={alCancelar} disabled={guardando}>
           Cancelar

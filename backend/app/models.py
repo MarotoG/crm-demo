@@ -145,6 +145,7 @@ class Contact(Base):
         CheckConstraint(_name_ascii("first_name"), name="first_name_ascii"),
         CheckConstraint(_name_ascii("last_name"), name="last_name_ascii"),
         CheckConstraint("email ~ '^[!-~]+$'", name="email_ascii"),
+        CheckConstraint("version >= 1", name="version_positive"),
         CheckConstraint(_in_list("source", ContactSource), name="source_valid"),
         CheckConstraint(_in_list("status", ContactStatus), name="status_valid"),
         # Duplicados (decisión T11): el email o el teléfono pueden repetirse (una familia),
@@ -181,3 +182,8 @@ class Contact(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+    # Quién hizo el último cambio (T13); el historial completo llegará con la auditoría.
+    updated_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    # Bloqueo optimista (T13): cada edición la sube en 1; quien edita envía la que leyó y,
+    # si ya no coincide, otra persona guardó antes (409).
+    version: Mapped[int] = mapped_column(default=1, server_default="1")
