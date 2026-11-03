@@ -459,6 +459,29 @@ select:focus-visible {
   color: var(--gris);
 }
 
+/* Reprogramar y cancelar (T19): en móvil, los dos botones comparten la fila. */
+.cita__acciones {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.cita__acciones button {
+  flex: 1 1 0;
+}
+
+.cancelar {
+  margin: 0.5rem 0 0;
+  padding: 0.75rem;
+  border: 1px solid var(--borde);
+  border-radius: 0.375rem;
+}
+
+.cancelar__pregunta {
+  margin: 0;
+  font-weight: 600;
+}
+
 .etiqueta {
   font-weight: 600;
 }
@@ -526,6 +549,15 @@ select:focus-visible {
 
   .cita__hora {
     grid-row: span 2;
+  }
+
+  .cita__acciones,
+  .cita .cancelar {
+    grid-column: 2;
+  }
+
+  .cita__acciones button {
+    flex: none;
   }
 
   button {

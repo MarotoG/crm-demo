@@ -7,6 +7,8 @@ from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, MetaData, S
 from sqlalchemy.dialects.postgresql import ExcludeConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from app.validators import MAX_CANCEL_NOTE_LENGTH
+
 # Nombres de restricciones predecibles, para que las migraciones sean estables.
 NAMING_CONVENTION = {
     "ix": "ix_%(column_0_label)s",
@@ -235,6 +237,15 @@ class AppointmentStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class CancelReason(StrEnum):
+    """Motivo de una cancelación (decisión T19): una lista cerrada, para que no se escriban datos
+    clínicos en él y sirva para contar. Se puede añadir un detalle corto aparte (cancel_note)."""
+
+    CLIENT_REQUEST = "client_request"
+    CLINIC = "clinic"
+    OTHER = "other"
+
+
 # La API la reconoce por su nombre para responder 409 (app/appointments_routes.py).
 STAFF_OVERLAP_CONSTRAINT = "ex_appointments_staff_overlap"
 
@@ -257,6 +268,12 @@ class Appointment(Base):
         # El fin no es un dato aparte: es el inicio más la duración (y por tanto posterior).
         CheckConstraint("ends_at = starts_at + duration_minutes * interval '1 minute'", name="ends_at_consistent"),
         CheckConstraint("version >= 1", name="version_positive"),
+        # Cancelación (T19): cancelada si y solo si tiene motivo; el detalle, solo con motivo.
+        CheckConstraint(_in_list("cancel_reason", CancelReason), name="cancel_reason_valid"),
+        CheckConstraint("(status = 'cancelled') = (cancel_reason IS NOT NULL)", name="cancelled_has_reason"),
+        CheckConstraint("cancel_note IS NULL OR cancel_reason IS NOT NULL", name="cancel_note_with_reason"),
+        CheckConstraint(_name_normalized("cancel_note"), name="cancel_note_normalized"),
+        CheckConstraint(f"cancel_note ~ '^[ -~]{{1,{MAX_CANCEL_NOTE_LENGTH}}}$'", name="cancel_note_ascii"),
         # La agenda de cada persona por fecha (T18).
         Index("ix_appointments_staff_id_starts_at", "staff_id", "starts_at"),
         # Solapamientos (T17): la misma persona no puede tener dos citas que se pisen. Intervalo
@@ -294,3 +311,6 @@ class Appointment(Base):
     updated_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     # Bloqueo optimista desde el principio, para reprogramar y cancelar (T19) como en T13.
     version: Mapped[int] = mapped_column(default=1, server_default="1")
+    # Al cancelar (T19): el motivo de la lista y, si se quiere, un detalle corto.
+    cancel_reason: Mapped[str | None] = mapped_column(String(20))
+    cancel_note: Mapped[str | None] = mapped_column(String(MAX_CANCEL_NOTE_LENGTH))

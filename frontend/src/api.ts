@@ -1,4 +1,4 @@
-// Llamadas a la API: salud del sistema (T06), sesión y usuarios (T10), contactos (T12–T14), servicios (T15) y citas (T16–T18). Las rutas son
+// Llamadas a la API: salud del sistema (T06), sesión y usuarios (T10), contactos (T12–T14), servicios (T15) y citas (T16–T19). Las rutas son
 // relativas (/api/...): en desarrollo las reenvía el proxy de Vite y en producción nginx.
 
 export type EstadoSalud =
@@ -296,9 +296,12 @@ export function actualizarServicio(
   return peticion<Servicio>(`/api/services/${id}`, { method: "PUT", cuerpo: datos, csrf });
 }
 
-// --- Citas (T16–T18) -----------------------------------------------------------
+// --- Citas (T16–T19) -----------------------------------------------------------
 
 export type EstadoCita = "scheduled" | "completed" | "no_show" | "cancelled";
+
+/** Motivo de una cancelación (T19): lista cerrada; el detalle opcional va aparte. */
+export type MotivoCancelacion = "client_request" | "clinic" | "other";
 
 /** Una cita de la agenda. Las horas vienen en la de la clínica, con su desfase («…T09:30:00-05:00»). */
 export type CitaAgenda = {
@@ -312,6 +315,9 @@ export type CitaAgenda = {
   status: EstadoCita;
   version: number;
   created_at: string;
+  /** Solo en las canceladas (T19). */
+  cancel_reason: MotivoCancelacion | null;
+  cancel_note: string | null;
   contact_name: string;
   service_name: string;
   staff_email: string;
@@ -331,4 +337,23 @@ export function listarCitas(dia: string, filtros: { persona?: number; contacto?:
 /** 409 si quien la realiza ya tiene otra cita que se pisa (T17); el mensaje dice cuál. */
 export function crearCita(datos: NuevaCita, csrf: string): Promise<Omit<CitaAgenda, "contact_name" | "service_name" | "staff_email">> {
   return peticion("/api/appointments", { method: "POST", cuerpo: datos, csrf });
+}
+
+/** Reprogramar (T19): día y hora (locales de la clínica) y persona, con la versión leída. 409 si
+ * otra persona la cambió antes o si la persona ya tiene otra cita que se pisa. */
+export function reprogramarCita(
+  id: number,
+  datos: { staff_id: number; starts_at: string; version: number },
+  csrf: string,
+): Promise<Omit<CitaAgenda, "contact_name" | "service_name" | "staff_email">> {
+  return peticion(`/api/appointments/${id}`, { method: "PUT", cuerpo: datos, csrf });
+}
+
+/** Cancelar (T19) con el motivo y, si se quiere, un detalle corto; libera la franja. */
+export function cancelarCita(
+  id: number,
+  datos: { version: number; reason: MotivoCancelacion; note: string | null },
+  csrf: string,
+): Promise<Omit<CitaAgenda, "contact_name" | "service_name" | "staff_email">> {
+  return peticion(`/api/appointments/${id}/cancel`, { method: "POST", cuerpo: datos, csrf });
 }

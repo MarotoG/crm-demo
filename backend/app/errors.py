@@ -25,3 +25,11 @@ def field_error(field: str, message: str) -> HTTPException:
         status.HTTP_422_UNPROCESSABLE_CONTENT,
         [{"type": "dato_no_valido", "loc": ["body", field], "msg": message}],
     )
+
+
+def body_error(message: str) -> HTTPException:
+    """422 que no es de un campo concreto (la interfaz lo muestra sobre el formulario)."""
+    return HTTPException(
+        status.HTTP_422_UNPROCESSABLE_CONTENT,
+        [{"type": "dato_no_valido", "loc": ["body"], "msg": message}],
+    )

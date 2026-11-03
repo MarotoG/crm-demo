@@ -120,6 +120,8 @@ def test_admin_y_recepcion_crean_una_cita(db, usuarios, escena, role):
         "status": "scheduled",
         "version": 1,
         "created_at": "",
+        "cancel_reason": None,
+        "cancel_note": None,
     }
     guardada = db.get(Appointment, cita["id"])
     # En la BD, el instante: 9:30 en Nueva York son las 14:30 UTC.
@@ -513,8 +515,8 @@ def test_la_misma_clienta_con_dos_personas_a_la_vez_si(db, usuarios, escena, ocu
 
 
 def test_la_cancelada_libera_la_franja(db, escena, ocupada):
-    # La ruta para cancelar llega en T19 (decisión T17): aquí se marca en la BD.
-    db.execute(update(Appointment).where(Appointment.id == ocupada["id"]).values(status="cancelled"))
+    # Marcada en la BD; la ruta para cancelar (T19) tiene sus propias pruebas más abajo.
+    db.execute(update(Appointment).where(Appointment.id == ocupada["id"]).values(status="cancelled", cancel_reason="other"))
     db.flush()
 
     assert crear(para_otro(db, escena)).status_code == 201
@@ -561,10 +563,11 @@ def _insertar(db, escena, inicio: str, fin: str, minutos: int = 60, estado: str 
     contact, service, persona = escena
     db.execute(
         text(
-            "INSERT INTO appointments (contact_id, service_id, staff_id, starts_at, ends_at, duration_minutes, status)"
-            " VALUES (:c, :s, :p, :inicio, :fin, :m, :estado)"
+            "INSERT INTO appointments (contact_id, service_id, staff_id, starts_at, ends_at, duration_minutes, status,"
+            " cancel_reason) VALUES (:c, :s, :p, :inicio, :fin, :m, :estado, :motivo)"
         ),
-        {"c": contact.id, "s": service.id, "p": persona.id, "inicio": inicio, "fin": fin, "m": minutos, "estado": estado},
+        {"c": contact.id, "s": service.id, "p": persona.id, "inicio": inicio, "fin": fin, "m": minutos, "estado": estado,
+         "motivo": "other" if estado == "cancelled" else None},
     )
 
 
@@ -586,14 +589,16 @@ def test_la_bd_impide_reactivar_una_cancelada_que_se_pisa(db, escena):
 
     with pytest.raises(IntegrityError, match="ex_appointments_staff_overlap"):
         with db.begin_nested():
-            db.execute(update(Appointment).where(Appointment.status == "cancelled").values(status="scheduled"))
+            db.execute(
+                update(Appointment).where(Appointment.status == "cancelled").values(status="scheduled", cancel_reason=None)
+            )
 
 
 def test_el_aviso_nombra_la_cita_que_de_verdad_choca(db, usuarios, escena):
     # Alrededor de la que choca (9:30-10:30) hay citas que empiezan antes y no cuentan: una
     # cancelada de la misma persona, una de otra persona y una seguida que acaba a las 9:30.
     cancelada = crear(datos(escena, starts_at="2027-01-11T09:00")).json()
-    db.execute(update(Appointment).where(Appointment.id == cancelada["id"]).values(status="cancelled"))
+    db.execute(update(Appointment).where(Appointment.id == cancelada["id"]).values(status="cancelled", cancel_reason="other"))
     db.commit()
     assert crear(para_otro(db, escena, starts_at="2027-01-11T08:30")).status_code == 201
     assert crear(para_otro(db, escena, starts_at="2027-01-11T09:30")).status_code == 201
@@ -679,3 +684,464 @@ def test_dia_no_valido_422(db, escena, dia):
 
 def test_sin_dia_422(db, escena):
     assert agenda().status_code == 422
+
+
+# --- Reprogramar (T19) ----------------------------------------------------------------------
+
+CAMBIADA = "Esta cita ha cambiado desde que la abriste. Revisa los datos y vuelve a intentarlo."
+
+
+def reprogramar(cita: dict, role: Role = Role.RECEPTION, **cambios):
+    """PUT con la persona, la hora y la versión de la cita, cambiando lo que se indique."""
+    client, csrf = sesion_de(role)
+    cuerpo = {"staff_id": cita["staff_id"], "starts_at": "2027-01-12T09:30", "version": cita["version"], **cambios}
+    return client.put(f"/api/appointments/{cita['id']}", json=cuerpo, headers=csrf)
+
+
+def cancelar(cita: dict, role: Role = Role.RECEPTION, **cambios):
+    client, csrf = sesion_de(role)
+    cuerpo = {"version": cita["version"], "reason": "client_request", **cambios}
+    return client.post(f"/api/appointments/{cita['id']}/cancel", json=cuerpo, headers=csrf)
+
+
+def en_bd(db, cita: dict) -> Appointment:
+    return db.get(Appointment, cita["id"], populate_existing=True)
+
+
+def marcar(db, cita: dict, **valores):
+    """Cambia la cita directamente en la BD (otra persona, o estados que llegarán después)."""
+    db.execute(update(Appointment).where(Appointment.id == cita["id"]).values(**valores))
+    db.commit()
+
+
+@pytest.mark.parametrize("role", [Role.ADMIN, Role.RECEPTION])
+def test_admin_y_recepcion_reprograman_una_cita(db, usuarios, escena, ocupada, role):
+    response = reprogramar(ocupada, role, starts_at="2027-01-12T16:15")
+
+    assert response.status_code == 200
+    assert response.json() | {"created_at": ""} == ocupada | {
+        "starts_at": "2027-01-12T16:15:00-05:00",
+        "ends_at": "2027-01-12T17:15:00-05:00",
+        "version": 2,
+        "created_at": "",
+    }
+    guardada = en_bd(db, ocupada)
+    assert guardada.starts_at == datetime(2027, 1, 12, 21, 15, tzinfo=UTC)
+    assert guardada.updated_by_id == usuarios[role].id
+
+
+@pytest.mark.parametrize("role", [Role.PROFESSIONAL, Role.CLIENT])
+def test_profesional_y_cliente_no_reprograman_ni_cancelan(db, escena, ocupada, role):
+    assert reprogramar(ocupada, role).status_code == 403
+    assert cancelar(ocupada, role).status_code == 403
+    guardada = en_bd(db, ocupada)
+    assert (guardada.status, guardada.version, guardada.starts_at.hour) == ("scheduled", 1, 14)
+
+
+def test_sin_token_csrf_no_se_reprograma_ni_se_cancela(db, escena, ocupada):
+    client, _ = sesion_de(Role.RECEPTION)
+
+    put = client.put(f"/api/appointments/{ocupada['id']}", json={"staff_id": ocupada["staff_id"], "starts_at": "2027-01-12T09:30", "version": 1})
+    post = client.post(f"/api/appointments/{ocupada['id']}/cancel", json={"version": 1, "reason": "other"})
+
+    assert (put.status_code, post.status_code) == (403, 403)
+    assert en_bd(db, ocupada).version == 1
+
+
+def test_cita_que_no_existe_404(db, escena, ocupada):
+    otra = ocupada | {"id": ocupada["id"] + 1000}
+
+    assert reprogramar(otra).status_code == 404
+    assert cancelar(otra).json() == {"detail": "Cita no encontrada"}
+
+
+def test_se_puede_cambiar_a_otra_persona_del_servicio(db, usuarios, escena):
+    contact, _, persona = escena
+    equipo = servicio(db, [persona, usuarios[Role.ADMIN]], 30, "Peel")
+    cita = crear(datos((contact, equipo, persona))).json()
+
+    response = reprogramar(cita, staff_id=usuarios[Role.ADMIN].id, starts_at="2027-01-11T09:30")
+
+    assert response.status_code == 200
+    assert response.json()["staff_id"] == usuarios[Role.ADMIN].id
+    # La franja que deja la otra persona queda libre.
+    assert crear(datos((contacto(db, email="bea@example.com"), equipo, persona))).status_code == 201
+
+
+@pytest.mark.parametrize("quien", ["no realiza el servicio", "desactivada", "cliente", "no existe"])
+def test_persona_no_valida_al_reprogramar_422(db, usuarios, escena, ocupada, quien):
+    personas = {
+        "no realiza el servicio": lambda: usuarios[Role.ADMIN].id,
+        "desactivada": lambda: escena[2].id,
+        "cliente": lambda: usuarios[Role.CLIENT].id,
+        "no existe": lambda: 999_999,
+    }
+    if quien == "desactivada":
+        db.execute(update(User).where(User.id == escena[2].id).values(active=False))
+        db.commit()
+    if quien == "cliente":
+        db.add(ServiceStaff(service_id=escena[1].id, user_id=usuarios[Role.CLIENT].id))
+        db.commit()
+
+    response = reprogramar(ocupada, staff_id=personas[quien]())
+
+    assert response.status_code == 422
+    assert error_de(response, "staff_id") == "Esa persona no realiza este servicio o su cuenta no está activa"
+    assert en_bd(db, ocupada).version == 1
+
+
+# Regresión de T17 al editar: la cita no choca consigo misma, pero sí con las demás.
+
+
+@pytest.mark.parametrize(
+    "starts_at", ["2027-01-11T10:00", "2027-01-11T09:00", "2027-01-11T09:30"], ids=["media hora más tarde", "media hora antes", "la misma hora"]
+)
+def test_moverla_dentro_de_su_propia_franja_si(db, escena, ocupada, starts_at):
+    # «Llego tarde, ¿me la pasas a las 10?»: la franja nueva pisa la antigua, que es la misma cita.
+    response = reprogramar(ocupada, starts_at=starts_at)
+
+    assert response.status_code == 200
+    assert contar(db) == 1
+
+
+def test_moverla_encima_de_otra_409_y_nombra_la_otra(db, escena, ocupada):
+    # Ana 9:30-10:30 y otra de 10:45 a 11:45. A las 10:00, Ana pisa su propia franja (que no
+    # cuenta) y la otra (que sí): el aviso debe nombrar la de las 10:45, no la de las 9:30.
+    assert crear(para_otro(db, escena, starts_at="2027-01-11T10:45")).status_code == 201
+
+    response = reprogramar(ocupada, starts_at="2027-01-11T10:00")
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Esa persona ya tiene una cita de 10:45 a 11:45"}
+    guardada = en_bd(db, ocupada)
+    assert (guardada.starts_at, guardada.version) == (datetime(2027, 1, 11, 14, 30, tzinfo=UTC), 1)
+
+
+def test_cambiar_a_una_persona_ocupada_409(db, usuarios, escena):
+    contact, _, persona = escena
+    admin = usuarios[Role.ADMIN]
+    equipo = servicio(db, [persona, admin], 60, "Peel")
+    cita = crear(datos((contact, equipo, persona))).json()
+    assert crear(datos((contacto(db, email="bea@example.com"), equipo, admin), starts_at="2027-01-11T09:00")).status_code == 201
+
+    response = reprogramar(cita, staff_id=admin.id, starts_at="2027-01-11T09:30")
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Esa persona ya tiene una cita de 9:00 a 10:00"}
+
+
+def test_moverla_a_la_franja_de_una_cancelada_si(db, escena, ocupada):
+    otra = crear(para_otro(db, escena, starts_at="2027-01-11T14:00")).json()
+    assert cancelar(otra).status_code == 200
+
+    assert reprogramar(ocupada, starts_at="2027-01-11T14:00").status_code == 200
+
+
+def test_tras_reprogramar_la_franja_antigua_queda_libre(db, escena, ocupada):
+    assert reprogramar(ocupada, starts_at="2027-01-11T15:00").status_code == 200
+
+    assert crear(para_otro(db, escena, starts_at="2027-01-11T09:30")).status_code == 201
+
+
+def test_conserva_la_duracion_copiada_aunque_cambie_el_servicio(db, escena, ocupada):
+    db.execute(update(Service).where(Service.id == escena[1].id).values(duration_minutes=90))
+    db.commit()
+
+    response = reprogramar(ocupada, starts_at="2027-01-12T09:00")
+
+    assert (response.json()["duration_minutes"], response.json()["ends_at"]) == (60, "2027-01-12T10:00:00-05:00")
+
+
+def test_reprogramar_cruzando_el_cambio_de_horario(db, escena, ocupada):
+    # 14/03/2027: de la 1:30 a las 3:30 del reloj hay una hora real.
+    response = reprogramar(ocupada, starts_at="2027-03-14T01:30")
+
+    assert (response.json()["starts_at"], response.json()["ends_at"]) == ("2027-03-14T01:30:00-05:00", "2027-03-14T03:30:00-04:00")
+
+
+@pytest.mark.parametrize(
+    "starts_at, mensaje",
+    [
+        ("2027-01-04T09:55", "La cita no puede empezar en el pasado"),
+        ("2028-01-05T10:00", "La cita no puede ser para dentro de más de 365 días"),
+        ("2027-03-14T02:30", "Esa hora no existe ese día: el reloj se adelanta una hora por el cambio de horario"),
+        ("2027-11-07T01:30", "Esa hora se repite ese día por el cambio de horario: elige otra"),
+        ("2027-01-12T09:32", "La hora de inicio debe ir en múltiplos de 5 minutos (9:00, 9:05, 9:10…)"),
+        ("2027-01-12 09:30", appointments_routes.START_FORMAT_MESSAGE),
+    ],
+)
+def test_la_hora_nueva_cumple_las_reglas_del_alta(db, escena, ocupada, starts_at, mensaje):
+    response = reprogramar(ocupada, starts_at=starts_at)
+
+    assert response.status_code == 422
+    assert error_de(response, "starts_at") == mensaje
+    assert en_bd(db, ocupada).version == 1
+
+
+def test_contacto_perdido_no_se_reprograma_pero_si_se_cancela(db, escena, ocupada):
+    db.execute(update(Contact).where(Contact.id == escena[0].id).values(status=ContactStatus.LOST))
+    db.commit()
+
+    response = reprogramar(ocupada)
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["msg"] == "El contacto está «Perdido»: reábrelo antes de cambiar la cita, o cancélala"
+    assert cancelar(ocupada).status_code == 200
+    assert db.get(Contact, escena[0].id, populate_existing=True).status == ContactStatus.LOST
+
+
+def test_servicio_desactivado_no_se_reprograma_pero_si_se_cancela(db, escena, ocupada):
+    db.execute(update(Service).where(Service.id == escena[1].id).values(active=False))
+    db.commit()
+
+    response = reprogramar(ocupada)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == [
+        {"type": "dato_no_valido", "loc": ["body"], "msg": "El servicio está desactivado: cancela la cita y da otra"}
+    ]
+    assert cancelar(ocupada).status_code == 200
+
+
+def test_reprogramar_no_cambia_el_contacto(db, escena, ocupada):
+    antes = db.get(Contact, escena[0].id, populate_existing=True)
+    estado, version = antes.status, antes.version
+
+    assert reprogramar(ocupada).status_code == 200
+
+    despues = db.get(Contact, escena[0].id, populate_existing=True)
+    assert (despues.status, despues.version) == (estado, version)
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [{"contact_id": 1}, {"service_id": 1}, {"duration_minutes": 30}, {"status": "cancelled"}, {"ends_at": "2027-01-12T09:45"}],
+    ids=["contacto", "servicio", "duración", "estado", "fin"],
+)
+def test_reprogramar_no_admite_otros_campos(db, escena, ocupada, extra):
+    assert reprogramar(ocupada, **extra).status_code == 422
+    assert en_bd(db, ocupada).version == 1
+
+
+@pytest.mark.parametrize("version", [0, "1", 1.0, None], ids=["cero", "texto", "decimal", "nula"])
+def test_la_version_es_un_entero_positivo(db, escena, ocupada, version):
+    assert reprogramar(ocupada, version=version).status_code == 422
+    assert cancelar(ocupada, version=version).status_code == 422
+
+
+# --- Versión y estado de la cita (T19) -----------------------------------------------------
+
+
+def test_con_la_version_antigua_409_y_no_se_pisa(db, escena, ocupada):
+    assert reprogramar(ocupada, starts_at="2027-01-12T09:00").status_code == 200
+
+    # Quien la abrió antes (versión 1) intenta moverla y cancelarla.
+    tarde = reprogramar(ocupada, starts_at="2027-01-13T09:00")
+    cancelada = cancelar(ocupada)
+
+    assert (tarde.status_code, tarde.json()) == (409, {"detail": CAMBIADA})
+    assert (cancelada.status_code, cancelada.json()) == (409, {"detail": CAMBIADA})
+    guardada = en_bd(db, ocupada)
+    assert (guardada.status, guardada.version, guardada.starts_at.day) == ("scheduled", 2, 12)
+
+
+@pytest.mark.parametrize(
+    "estado, nombre", [("cancelled", "Cancelada"), ("completed", "Realizada"), ("no_show", "No presentado")]
+)
+def test_solo_se_cambian_las_programadas(db, escena, ocupada, estado, nombre):
+    # Con la versión al día: lo que lo impide es el estado.
+    marcar(db, ocupada, status=estado, cancel_reason="other" if estado == "cancelled" else None)
+
+    mensaje = {"detail": f"La cita está «{nombre}»: ya no se puede cambiar"}
+    assert (reprogramar(ocupada).status_code, reprogramar(ocupada).json()) == (409, mensaje)
+    assert (cancelar(ocupada).status_code, cancelar(ocupada).json()) == (409, mensaje)
+
+
+@pytest.mark.parametrize(
+    "inicio, fin",
+    [("2027-01-04 15:00+00", "2027-01-04 16:00+00"), ("2027-01-04 14:00+00", "2027-01-04 15:00+00")],
+    ids=["empieza justo ahora", "empezó hace una hora"],
+)
+def test_la_que_ya_ha_empezado_no_se_cambia(db, escena, inicio, fin):
+    _insertar(db, escena, inicio, fin)
+    db.commit()
+    cita = {"id": db.scalar(select(Appointment.id)), "staff_id": escena[2].id, "version": 1}
+
+    for response in (reprogramar(cita), cancelar(cita)):
+        assert (response.status_code, response.json()) == (409, {"detail": "La cita ya ha empezado: no se puede cambiar"})
+
+
+# --- Cancelar (T19) --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("role", [Role.ADMIN, Role.RECEPTION])
+def test_admin_y_recepcion_cancelan_con_motivo_y_detalle(db, usuarios, escena, ocupada, role):
+    response = cancelar(ocupada, role, reason="clinic", note="  La profesional   no viene  ")
+
+    assert response.status_code == 200
+    assert response.json() | {"created_at": ""} == ocupada | {
+        "status": "cancelled",
+        "version": 2,
+        "cancel_reason": "clinic",
+        "cancel_note": "La profesional no viene",
+        "created_at": "",
+    }
+    assert en_bd(db, ocupada).updated_by_id == usuarios[role].id
+
+
+@pytest.mark.parametrize("motivo", ["client_request", "clinic", "other"])
+def test_los_tres_motivos_valen_y_el_detalle_es_opcional(db, escena, ocupada, motivo):
+    response = cancelar(ocupada, reason=motivo)
+
+    assert response.status_code == 200
+    assert (response.json()["cancel_reason"], response.json()["cancel_note"]) == (motivo, None)
+
+
+@pytest.mark.parametrize("cuerpo", [{}, {"reason": "illness"}, {"reason": ""}, {"reason": None}, {"reason": 1}],
+                         ids=["sin motivo", "desconocido", "vacío", "nulo", "número"])
+def test_el_motivo_es_obligatorio_y_de_la_lista(db, escena, ocupada, cuerpo):
+    client, csrf = sesion_de(Role.RECEPTION)
+
+    response = client.post(f"/api/appointments/{ocupada['id']}/cancel", json={"version": 1, **cuerpo}, headers=csrf)
+
+    assert response.status_code == 422
+    if cuerpo:
+        assert error_de(response, "reason") == "Elige el motivo de la cancelación"
+    assert en_bd(db, ocupada).status == "scheduled"
+
+
+@pytest.mark.parametrize(
+    "nota, guardada",
+    [("", None), ("   ", None), ("Llamo\nmanana", "Llamo manana"), ("x" * 200, "x" * 200)],
+    ids=["vacía", "solo espacios", "salto de línea", "200 caracteres"],
+)
+def test_el_detalle_se_normaliza(db, escena, ocupada, nota, guardada):
+    response = cancelar(ocupada, note=nota)
+
+    assert response.status_code == 200
+    assert en_bd(db, ocupada).cancel_note == guardada
+
+
+@pytest.mark.parametrize(
+    "nota, mensaje",
+    [
+        ("x" * 201, "El detalle no puede tener más de 200 caracteres"),
+        ("Llamará mañana", "No se permiten tildes ni caracteres especiales (á, ñ, ü…)"),
+        ("Tab​Oculto", "No se permiten tildes ni caracteres especiales (á, ñ, ü…)"),
+        (12, "El detalle debe ser texto"),
+    ],
+    ids=["201 caracteres", "tildes", "invisible", "número"],
+)
+def test_detalle_no_valido_422(db, escena, ocupada, nota, mensaje):
+    response = cancelar(ocupada, note=nota)
+
+    assert response.status_code == 422
+    assert error_de(response, "note") == mensaje
+    assert en_bd(db, ocupada).status == "scheduled"
+
+
+def test_cancelar_no_admite_otros_campos(db, escena, ocupada):
+    assert cancelar(ocupada, status="scheduled").status_code == 422
+
+
+def test_cancelar_libera_la_franja(db, escena, ocupada):
+    assert crear(para_otro(db, escena)).status_code == 409
+
+    assert cancelar(ocupada).status_code == 200
+
+    assert crear(para_otro(db, escena)).status_code == 201
+
+
+def test_cancelar_la_ultima_programada_devuelve_el_contacto_a_contactado(db, usuarios, escena, ocupada):
+    contact = db.get(Contact, escena[0].id, populate_existing=True)
+    assert (contact.status, contact.version) == (ContactStatus.SCHEDULED, 2)
+
+    assert cancelar(ocupada, Role.ADMIN).status_code == 200
+
+    contact = db.get(Contact, escena[0].id, populate_existing=True)
+    assert (contact.status, contact.version, contact.updated_by_id) == (ContactStatus.CONTACTED, 3, usuarios[Role.ADMIN].id)
+
+
+def test_si_le_queda_otra_programada_sigue_en_cita_agendada(db, escena, ocupada):
+    otra = crear(datos(escena, starts_at="2027-01-12T09:30")).json()
+
+    assert cancelar(ocupada).status_code == 200
+    contact = db.get(Contact, escena[0].id, populate_existing=True)
+    assert (contact.status, contact.version) == (ContactStatus.SCHEDULED, 2)
+
+    assert cancelar(otra).status_code == 200
+    assert db.get(Contact, escena[0].id, populate_existing=True).status == ContactStatus.CONTACTED
+
+
+@pytest.mark.parametrize("estado", ["completed", "no_show", "cancelled"])
+def test_las_que_no_estan_programadas_no_cuentan_como_pendientes(db, escena, ocupada, estado):
+    otra = crear(datos(escena, starts_at="2027-01-12T09:30")).json()
+    marcar(db, otra, status=estado, cancel_reason="other" if estado == "cancelled" else None)
+
+    assert cancelar(ocupada).status_code == 200
+
+    assert db.get(Contact, escena[0].id, populate_existing=True).status == ContactStatus.CONTACTED
+
+
+def test_un_cliente_sigue_siendo_cliente(db, escena, ocupada):
+    db.execute(update(Contact).where(Contact.id == escena[0].id).values(status=ContactStatus.CLIENT))
+    db.commit()
+
+    assert cancelar(ocupada).status_code == 200
+
+    assert db.get(Contact, escena[0].id, populate_existing=True).status == ContactStatus.CLIENT
+
+
+def test_quien_editaba_la_ficha_antes_de_cancelar_recibe_409(db, escena, ocupada):
+    # Cancelar la última cita cambia el estado del contacto y sube su versión (como el alta, T16).
+    assert cancelar(ocupada).status_code == 200
+    client, csrf = sesion_de(Role.RECEPTION)
+
+    response = client.put(f"/api/contacts/{escena[0].id}/status", json={"status": "lost", "version": 2}, headers=csrf)
+
+    assert response.status_code == 409
+
+
+# --- La BD repite las reglas de la cancelación (T19) ----------------------------------------
+
+
+@pytest.mark.parametrize(
+    "estado, motivo, nota",
+    [
+        ("cancelled", None, None),  # cancelada sin motivo
+        ("scheduled", "other", None),  # motivo sin estar cancelada
+        ("cancelled", "illness", None),  # motivo fuera de la lista
+        ("scheduled", None, "Nota suelta"),  # detalle sin motivo
+        ("cancelled", "other", "Llamará"),  # detalle con tilde
+        ("cancelled", "other", " Con espacios "),  # detalle sin normalizar
+        ("cancelled", "other", ""),  # detalle vacío
+        ("cancelled", "other", "x" * 201),  # más de 200
+    ],
+)
+def test_la_bd_repite_las_reglas_de_la_cancelacion(db, escena, estado, motivo, nota):
+    contact, service, persona = escena
+    with pytest.raises(Exception) as fallo:
+        with db.begin_nested():
+            db.execute(
+                text(
+                    "INSERT INTO appointments (contact_id, service_id, staff_id, starts_at, ends_at, duration_minutes,"
+                    " status, cancel_reason, cancel_note) VALUES (:c, :s, :p, '2027-01-11 14:30+00',"
+                    " '2027-01-11 15:30+00', 60, :estado, :motivo, :nota)"
+                ),
+                {"c": contact.id, "s": service.id, "p": persona.id, "estado": estado, "motivo": motivo, "nota": nota},
+            )
+    # 201 caracteres no caben en la columna (varchar(200)); lo demás lo paran las CHECK.
+    assert fallo.type.__name__ in {"IntegrityError", "DataError"}
+
+
+def test_la_bd_admite_una_cancelada_con_motivo_y_detalle(db, escena):
+    contact, service, persona = escena
+    db.execute(
+        text(
+            "INSERT INTO appointments (contact_id, service_id, staff_id, starts_at, ends_at, duration_minutes,"
+            " status, cancel_reason, cancel_note) VALUES (:c, :s, :p, '2027-01-11 14:30+00',"
+            " '2027-01-11 15:30+00', 60, 'cancelled', 'clinic', 'Cierre por nieve')"
+        ),
+        {"c": contact.id, "s": service.id, "p": persona.id},
+    )
+    assert contar(db) == 1

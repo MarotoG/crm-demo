@@ -172,3 +172,22 @@ def clinic_instant(local: datetime, zone: ZoneInfo) -> datetime:
             raise ValueError("Esa hora no existe ese día: el reloj se adelanta una hora por el cambio de horario")
         raise ValueError("Esa hora se repite ese día por el cambio de horario: elige otra")
     return first.astimezone(UTC)
+
+
+# --- Cancelación de una cita (T19) --------------------------------------------------
+
+MAX_CANCEL_NOTE_LENGTH = 200
+# Una línea de caracteres ASCII visibles y espacios. La BD repite la regla (ck_appointments_cancel_note_ascii).
+_CANCEL_NOTE = re.compile(r"[ -~]+")
+
+
+def normalize_cancel_note(value: str) -> str | None:
+    """Detalle opcional de la cancelación: una línea sin espacios repetidos; vacío → sin detalle."""
+    note = " ".join(value.split())
+    if not note:
+        return None
+    if len(note) > MAX_CANCEL_NOTE_LENGTH:
+        raise ValueError(f"El detalle no puede tener más de {MAX_CANCEL_NOTE_LENGTH} caracteres")
+    if not _CANCEL_NOTE.fullmatch(note):
+        raise ValueError(NO_ACCENTS_MESSAGE)
+    return note

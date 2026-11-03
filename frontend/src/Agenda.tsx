@@ -8,11 +8,16 @@
 // Quién puede hacer qué y los solapamientos de una persona los decide la API (403, 409). El
 // aviso de que el contacto ya tiene otra cita a esa hora es solo eso, un aviso (decisión T17):
 // una clienta puede recibir dos servicios a la vez con personas distintas.
+//
+// Reprogramar y cancelar (T19): solo las citas Programadas que no han empezado. Reprogramar abre
+// el mismo formulario con el contacto y el servicio fijos (/agenda?reprogramar=12); cancelar pide
+// el motivo en la propia fila. Las canceladas siguen en la lista, atenuadas y con su motivo.
 
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router";
 
 import {
+  cancelarCita,
   crearCita,
   ErrorApi,
   listarCitas,
@@ -20,10 +25,12 @@ import {
   listarPersonasAsignables,
   listarServicios,
   obtenerContacto,
+  reprogramarCita,
   type CitaAgenda,
   type Contacto,
   type EstadoCita,
   type FiltrosContactos,
+  type MotivoCancelacion,
   type PersonaServicio,
   type Servicio,
 } from "./api";
@@ -37,6 +44,17 @@ export const NOMBRE_ESTADO_CITA: Record<EstadoCita, string> = {
   no_show: "No presentado",
   cancelled: "Cancelada",
 };
+
+export const NOMBRE_MOTIVO: Record<MotivoCancelacion, string> = {
+  client_request: "Lo pidió la clienta",
+  clinic: "Lo canceló la clínica",
+  other: "Otro motivo",
+};
+
+/** Solo se reprograma o cancela una cita Programada que todavía no ha empezado (decisión T19). */
+export function sePuedeCambiar(cita: CitaAgenda, ahora: Date = new Date()): boolean {
+  return cita.status === "scheduled" && new Date(cita.starts_at).getTime() > ahora.getTime();
+}
 
 // --- Fechas y horas en la zona de la clínica ---------------------------------------
 
@@ -100,6 +118,14 @@ export function horaEn(dia: string, iso: string): string {
 
 const tramo = (dia: string, cita: CitaAgenda) => `${horaEn(dia, cita.starts_at)}–${horaEn(dia, cita.ends_at)}`;
 
+/** «Cancelada (Lo pidió la clienta: Llamara otro dia)»; el resto de estados, solo su nombre. */
+function estadoDe(cita: CitaAgenda): string {
+  const nombre = NOMBRE_ESTADO_CITA[cita.status];
+  if (cita.status !== "cancelled" || !cita.cancel_reason) return nombre;
+  const motivo = NOMBRE_MOTIVO[cita.cancel_reason];
+  return `${nombre} (${cita.cancel_note ? `${motivo}: ${cita.cancel_note}` : motivo})`;
+}
+
 // --- Agenda ---------------------------------------------------------------------------
 
 type EstadoLista = { tipo: "cargando" } | { tipo: "error"; mensaje: string } | { tipo: "ok"; citas: CitaAgenda[] };
@@ -116,10 +142,16 @@ export default function Agenda() {
   const persona = parametros.get("persona") ?? ""; // "": todas
   const nueva = parametros.get("nueva") === "1";
   const contactoInicial = Number(parametros.get("contacto")) || null;
+  const reprogramar = Number(parametros.get("reprogramar")) || null;
   const [lista, setLista] = useState<EstadoLista>({ tipo: "cargando" });
   const [recarga, setRecarga] = useState(0);
   const [personas, setPersonas] = useState<PersonaServicio[]>([]);
   const [creada, setCreada] = useState<string | null>(null);
+  // La cita que se reprograma, tal como llegó en la última lista: se conserva mientras la lista
+  // se recarga, y la recarga trae su versión nueva si otra persona la cambió (409).
+  const [enEdicion, setEnEdicion] = useState<CitaAgenda | null>(null);
+  const [cancelando, setCancelando] = useState<number | null>(null);
+  const [aviso, setAviso] = useState<string | null>(null);
 
   function cambiar(cambios: Record<string, string | null>) {
     const nuevos = new URLSearchParams(parametros);
@@ -152,11 +184,24 @@ export default function Agenda() {
       .catch(() => setPersonas([])); // sin la lista, el filtro solo ofrece «Todas»
   }, []);
 
+  useEffect(() => {
+    if (lista.tipo !== "ok" || reprogramar === null) return;
+    const encontrada = lista.citas.find((c) => c.id === reprogramar);
+    if (encontrada) setEnEdicion(encontrada);
+  }, [lista, reprogramar]);
+
   function alGuardar(diaDeLaCita: string, texto: string) {
     setCreada(texto);
-    cambiar({ nueva: null, contacto: null, fecha: diaDeLaCita });
+    cambiar({ nueva: null, contacto: null, reprogramar: null, fecha: diaDeLaCita });
     setRecarga((n) => n + 1);
   }
+
+  function limpiarMensajes() {
+    setCreada(null);
+    setAviso(null);
+  }
+
+  const editada = enEdicion && enEdicion.id === reprogramar ? enEdicion : null;
 
   return (
     <section className="tarjeta" aria-labelledby="titulo-agenda">
@@ -167,8 +212,23 @@ export default function Agenda() {
           {creada}
         </p>
       )}
+      {aviso && (
+        <p className="error" role="alert">
+          {aviso}
+        </p>
+      )}
 
-      {nueva ? (
+      {editada && sePuedeCambiar(editada) ? (
+        <FormularioCita
+          key={editada.id}
+          diaInicial={dia}
+          contactoInicial={null}
+          cita={editada}
+          alGuardar={alGuardar}
+          alCancelar={() => cambiar({ reprogramar: null })}
+          alConflicto={() => setRecarga((n) => n + 1)}
+        />
+      ) : nueva ? (
         <FormularioCita
           diaInicial={dia}
           contactoInicial={contactoInicial}
@@ -176,15 +236,24 @@ export default function Agenda() {
           alCancelar={() => cambiar({ nueva: null, contacto: null })}
         />
       ) : (
-        <button
-          type="button"
-          onClick={() => {
-            setCreada(null);
-            cambiar({ nueva: "1" });
-          }}
-        >
-          Nueva cita
-        </button>
+        <>
+          {editada && (
+            // Otra persona la canceló (o empezó) mientras se reprogramaba: la recarga lo muestra.
+            <p className="error" role="alert">
+              Esta cita ya no se puede reprogramar: está «{NOMBRE_ESTADO_CITA[editada.status]}»
+              {editada.status === "scheduled" && " y ya ha empezado"}.
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              limpiarMensajes();
+              cambiar({ nueva: "1", reprogramar: null });
+            }}
+          >
+            Nueva cita
+          </button>
+        </>
       )}
 
       <div className="dia">
@@ -243,8 +312,54 @@ export default function Agenda() {
               </Link>
               <span className="cita__meta">
                 {c.service_name} · {c.staff_email}
-                {c.status !== "scheduled" && ` · ${NOMBRE_ESTADO_CITA[c.status]}`}
+                {c.status !== "scheduled" && ` · ${estadoDe(c)}`}
               </span>
+              {sePuedeCambiar(c) && cancelando !== c.id && (
+                <span className="cita__acciones">
+                  <button
+                    type="button"
+                    className="secundario"
+                    aria-label={`Reprogramar: ${c.contact_name}, ${tramo(dia, c)}`}
+                    onClick={() => {
+                      limpiarMensajes();
+                      setCancelando(null);
+                      setEnEdicion(c);
+                      cambiar({ reprogramar: String(c.id), nueva: null, contacto: null });
+                    }}
+                  >
+                    Reprogramar
+                  </button>
+                  <button
+                    type="button"
+                    className="secundario"
+                    aria-label={`Cancelar la cita: ${c.contact_name}, ${tramo(dia, c)}`}
+                    onClick={() => {
+                      limpiarMensajes();
+                      setCancelando(c.id);
+                    }}
+                  >
+                    Cancelar cita
+                  </button>
+                </span>
+              )}
+              {sePuedeCambiar(c) && cancelando === c.id && (
+                <FormularioCancelar
+                  cita={c}
+                  dia={dia}
+                  alTerminar={(texto) => {
+                    setCancelando(null);
+                    setCreada(texto);
+                    setRecarga((n) => n + 1);
+                  }}
+                  alConflicto={(texto) => {
+                    // Otra persona la cambió: se cierra, se avisa y la lista trae la versión nueva.
+                    setCancelando(null);
+                    setAviso(texto);
+                    setRecarga((n) => n + 1);
+                  }}
+                  alVolver={() => setCancelando(null)}
+                />
+              )}
             </li>
           ))}
         </ul>
@@ -272,29 +387,37 @@ function reservables(servicios: Servicio[]): Servicio[] {
   return servicios.filter((s) => s.active && s.staff.some((p) => p.active));
 }
 
+/** Nueva cita o, con `cita`, reprogramarla (T19): el contacto y el servicio quedan fijos y se
+ * cambian el día, la hora y la persona. La versión se lee de `cita` al guardar: tras un 409 la
+ * agenda se recarga (`alConflicto`) y llega la nueva. */
 function FormularioCita({
   diaInicial,
   contactoInicial,
+  cita,
   alGuardar,
   alCancelar,
+  alConflicto,
 }: {
   diaInicial: string;
   contactoInicial: number | null;
+  cita?: CitaAgenda;
   alGuardar: (dia: string, texto: string) => void;
   alCancelar: () => void;
+  alConflicto?: () => void;
 }) {
   const { estado, caducada } = useSesion();
-  const [contacto, setContacto] = useState<Elegido | null>(null);
+  const inicial = cita ? enLaClinica(new Date(cita.starts_at)) : null;
+  const [contacto, setContacto] = useState<Elegido | null>(cita ? { id: cita.contact_id, nombre: cita.contact_name } : null);
   const [texto, setTexto] = useState("");
   const [busqueda, setBusqueda] = useState("");
   const [resultados, setResultados] = useState<Contacto[] | null>(null);
   const [servicios, setServicios] = useState<EstadoServicios>({ tipo: "cargando" });
   const [intento, setIntento] = useState(0);
-  const [servicioId, setServicioId] = useState("");
-  const [personaId, setPersonaId] = useState("");
-  const [dia, setDia] = useState(diaInicial);
-  const [hora, setHora] = useState("9");
-  const [minuto, setMinuto] = useState("00");
+  const [servicioId, setServicioId] = useState(cita ? String(cita.service_id) : "");
+  const [personaId, setPersonaId] = useState(cita ? String(cita.staff_id) : "");
+  const [dia, setDia] = useState(inicial ? inicial.dia : diaInicial);
+  const [hora, setHora] = useState(inicial ? String(Math.floor(inicial.minutos / 60)) : "9");
+  const [minuto, setMinuto] = useState(inicial ? String(inicial.minutos % 60).padStart(2, "0") : "00");
   const [ocupadas, setOcupadas] = useState<CitaAgenda[] | null>(null);
   const [delContacto, setDelContacto] = useState<CitaAgenda[]>([]);
   const [recargaOcupadas, setRecargaOcupadas] = useState(0);
@@ -370,14 +493,20 @@ function FormularioCita({
   const lista = servicios.tipo === "ok" ? servicios.lista : [];
   const servicio = lista.find((s) => String(s.id) === servicioId);
   const personasDelServicio = servicio ? servicio.staff.filter((p) => p.active) : [];
+  // Al reprogramar, la propia cita no cuenta: ni ocupa a la persona ni da aviso al contacto.
+  const otrasOcupadas = ocupadas && ocupadas.filter((c) => c.id !== cita?.id);
+  const otrasDelContacto = delContacto.filter((c) => c.id !== cita?.id);
+  // Al reprogramar se conserva la duración copiada al crearla (T16), aunque el servicio cambie.
+  const duracion = cita ? cita.duration_minutes : servicio?.duration_minutes;
 
   // Aviso no bloqueante: otra cita del contacto que se pisa con la que se está dando.
   const inicio = Number(hora) * 60 + Number(minuto);
-  const coinciden = servicio
-    ? delContacto.filter(
-        (c) => minutosDesde(dia, c.starts_at) < inicio + servicio.duration_minutes && inicio < minutosDesde(dia, c.ends_at),
-      )
-    : [];
+  const coinciden =
+    duracion !== undefined
+      ? otrasDelContacto.filter(
+          (c) => minutosDesde(dia, c.starts_at) < inicio + duracion && inicio < minutosDesde(dia, c.ends_at),
+        )
+      : [];
 
   function quitarError(campo: Campo) {
     setErrores(({ [campo]: _anterior, ...resto }) => resto);
@@ -399,24 +528,27 @@ function FormularioCita({
     setGeneral([]);
     const previos: Partial<Record<Campo, string>> = {};
     if (!contacto) previos.contact_id = "Elige el contacto";
-    if (!servicio) previos.service_id = "Elige el servicio";
+    if (!servicio && !cita) previos.service_id = "Elige el servicio";
     if (!personaId) previos.staff_id = "Elige quién la realiza";
     if (!diaValido(dia)) previos.starts_at = "Elige el día";
     setErrores(previos);
-    if (!contacto || !servicio || Object.keys(previos).length) return;
+    if (!contacto || Object.keys(previos).length) return;
+    const startsAt = `${dia}T${hora.padStart(2, "0")}:${minuto}`;
     setGuardando(true);
     try {
-      const cita = await crearCita(
-        {
-          contact_id: contacto.id,
-          service_id: servicio.id,
-          staff_id: Number(personaId),
-          starts_at: `${dia}T${hora.padStart(2, "0")}:${minuto}`,
-        },
-        csrf,
-      );
-      const horas = `${HORA.format(new Date(cita.starts_at))}–${HORA.format(new Date(cita.ends_at))}`;
-      alGuardar(dia, `Cita creada: ${contacto.nombre}, ${formatoDia(dia)}, ${horas} (${servicio.name})`);
+      let guardada;
+      if (cita) {
+        guardada = await reprogramarCita(cita.id, { staff_id: Number(personaId), starts_at: startsAt, version: cita.version }, csrf);
+      } else if (servicio) {
+        guardada = await crearCita(
+          { contact_id: contacto.id, service_id: servicio.id, staff_id: Number(personaId), starts_at: startsAt },
+          csrf,
+        );
+      } else return;
+      const horas = `${HORA.format(new Date(guardada.starts_at))}–${HORA.format(new Date(guardada.ends_at))}`;
+      const accion = cita ? "Cita reprogramada" : "Cita creada";
+      const nombreServicio = cita ? cita.service_name : servicio?.name;
+      alGuardar(dia, `${accion}: ${contacto.nombre}, ${formatoDia(dia)}, ${horas} (${nombreServicio})`);
     } catch (error) {
       setGuardando(false);
       if (!(error instanceof ErrorApi)) return setGeneral(["Error inesperado"]);
@@ -426,9 +558,13 @@ function FormularioCita({
         setGeneral(error.general.length || Object.keys(error.campos).length ? error.general : [error.message]);
         return;
       }
-      // 409: esa persona ya tiene otra cita que se pisa. Se refresca su ocupación para verla.
-      if (error.status === 409) setRecargaOcupadas((n) => n + 1);
-      setGeneral([error.message]);
+      // 409: esa persona ya tiene otra cita que se pisa, o (al reprogramar) otra persona cambió
+      // la cita. Se refresca su ocupación y la agenda, que trae la versión nueva de la cita.
+      if (error.status === 409) {
+        setRecargaOcupadas((n) => n + 1);
+        alConflicto?.();
+      }
+      setGeneral([error.status === 404 ? "Esta cita ya no existe" : error.message]);
     }
   }
 
@@ -444,9 +580,11 @@ function FormularioCita({
 
   const describe = (campo: Campo) => (errores[campo] ? `error-${campo}` : undefined);
 
+  const titulo = cita ? "Reprogramar cita" : "Nueva cita";
+
   return (
-    <form className="formulario" onSubmit={enviar} noValidate aria-label="Nueva cita">
-      <h3>Nueva cita</h3>
+    <form className="formulario" onSubmit={enviar} noValidate aria-label={titulo}>
+      <h3>{titulo}</h3>
 
       <div className="campo">
         {contacto ? (
@@ -454,16 +592,18 @@ function FormularioCita({
             <span className="etiqueta">Contacto</span>
             <p className="elegido">
               <strong>{contacto.nombre}</strong>{" "}
-              <button
-                type="button"
-                className="secundario"
-                onClick={() => {
-                  setContacto(null);
-                  quitarError("contact_id");
-                }}
-              >
-                Cambiar
-              </button>
+              {!cita && (
+                <button
+                  type="button"
+                  className="secundario"
+                  onClick={() => {
+                    setContacto(null);
+                    quitarError("contact_id");
+                  }}
+                >
+                  Cambiar
+                </button>
+              )}
             </p>
           </>
         ) : (
@@ -518,28 +658,44 @@ function FormularioCita({
           </button>
         </>
       )}
-      {servicios.tipo === "ok" && lista.length === 0 && (
+      {!cita && servicios.tipo === "ok" && lista.length === 0 && (
         <p className="aviso">No hay servicios que se puedan reservar: añade uno en «Servicios» con alguien que lo realice.</p>
       )}
 
-      <div className="campo">
-        <label htmlFor="cita-servicio">Servicio</label>
-        <select
-          id="cita-servicio"
-          value={servicioId}
-          aria-invalid={errores.service_id ? true : undefined}
-          aria-describedby={describe("service_id")}
-          onChange={(e) => elegirServicio(e.target.value)}
-        >
-          <option value="">Elige el servicio…</option>
-          {lista.map((s) => (
-            <option key={s.id} value={String(s.id)}>
-              {s.name} ({formatoDuracion(s.duration_minutes)})
-            </option>
-          ))}
-        </select>
-        {errorDe("service_id")}
-      </div>
+      {cita ? (
+        // Al reprogramar, el servicio no cambia (decisión T19): para otro, se cancela y se da otra.
+        <div className="campo">
+          <span className="etiqueta">Servicio</span>
+          <p className="elegido">
+            <strong>
+              {cita.service_name} ({formatoDuracion(cita.duration_minutes)})
+            </strong>
+          </p>
+          <p className="ayuda">Para cambiar de servicio, cancela esta cita y da otra.</p>
+          {servicios.tipo === "ok" && !servicio && (
+            <p className="aviso">El servicio está desactivado o nadie activo lo realiza: cancela la cita y da otra.</p>
+          )}
+        </div>
+      ) : (
+        <div className="campo">
+          <label htmlFor="cita-servicio">Servicio</label>
+          <select
+            id="cita-servicio"
+            value={servicioId}
+            aria-invalid={errores.service_id ? true : undefined}
+            aria-describedby={describe("service_id")}
+            onChange={(e) => elegirServicio(e.target.value)}
+          >
+            <option value="">Elige el servicio…</option>
+            {lista.map((s) => (
+              <option key={s.id} value={String(s.id)}>
+                {s.name} ({formatoDuracion(s.duration_minutes)})
+              </option>
+            ))}
+          </select>
+          {errorDe("service_id")}
+        </div>
+      )}
 
       <div className="campo">
         <label htmlFor="cita-persona">Quién la realiza</label>
@@ -609,10 +765,10 @@ function FormularioCita({
       <p className="ayuda">Hora de Nueva York.</p>
       {errorDe("starts_at")}
 
-      {ocupadas !== null && (
+      {otrasOcupadas !== null && (
         <p className="ayuda" aria-live="polite">
-          {ocupadas.length
-            ? `Ya tiene ese día: ${ocupadas.map((c) => tramo(dia, c)).join(", ")}`
+          {otrasOcupadas.length
+            ? `Ya tiene ese día: ${otrasOcupadas.map((c) => tramo(dia, c)).join(", ")}`
             : "No tiene otras citas ese día."}
         </p>
       )}
@@ -631,10 +787,128 @@ function FormularioCita({
       ))}
       <div className="acciones">
         <button type="submit" disabled={guardando}>
-          {guardando ? "Guardando…" : "Guardar cita"}
+          {guardando ? "Guardando…" : cita ? "Guardar cambios" : "Guardar cita"}
         </button>
         <button type="button" className="secundario" onClick={alCancelar} disabled={guardando}>
-          Cancelar
+          {/* Al reprogramar, «Cancelar» se confundiría con cancelar la cita. */}
+          {cita ? "Volver" : "Cancelar"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+// --- Cancelar una cita (T19) ------------------------------------------------------------------
+
+const MAX_DETALLE = 200;
+
+/** En la propia fila: motivo de la lista (obligatorio) y un detalle corto opcional. */
+function FormularioCancelar({
+  cita,
+  dia,
+  alTerminar,
+  alConflicto,
+  alVolver,
+}: {
+  cita: CitaAgenda;
+  dia: string;
+  alTerminar: (texto: string) => void;
+  alConflicto: (texto: string) => void;
+  alVolver: () => void;
+}) {
+  const { estado, caducada } = useSesion();
+  const [motivo, setMotivo] = useState<MotivoCancelacion | "">("");
+  const [detalle, setDetalle] = useState("");
+  const [errores, setErrores] = useState<Record<string, string>>({});
+  const [general, setGeneral] = useState<string[]>([]);
+  const [guardando, setGuardando] = useState(false);
+
+  if (estado.tipo !== "dentro") return null;
+  const csrf = estado.usuario.csrf_token;
+
+  async function enviar(evento: FormEvent) {
+    evento.preventDefault();
+    setGeneral([]);
+    if (!motivo) return setErrores({ reason: "Elige el motivo" });
+    setErrores({});
+    setGuardando(true);
+    try {
+      await cancelarCita(cita.id, { version: cita.version, reason: motivo, note: detalle.trim() || null }, csrf);
+      alTerminar(`Cita cancelada: ${cita.contact_name}, ${tramo(dia, cita)} (${cita.service_name})`);
+    } catch (error) {
+      setGuardando(false);
+      if (!(error instanceof ErrorApi)) return setGeneral(["Error inesperado"]);
+      if (error.status === 401) return caducada();
+      if (error.status === 409) return alConflicto(error.message);
+      if (error.status === 404) return alConflicto("Esta cita ya no existe");
+      if (error.status === 422) {
+        setErrores(error.campos);
+        return setGeneral(error.general.length || Object.keys(error.campos).length ? error.general : [error.message]);
+      }
+      setGeneral([error.message]);
+    }
+  }
+
+  return (
+    <form className="formulario cancelar" onSubmit={enviar} noValidate aria-label="Cancelar la cita">
+      <p className="cancelar__pregunta">
+        ¿Cancelar la cita de {cita.contact_name} ({tramo(dia, cita)})? La franja quedará libre.
+      </p>
+      <div className="campo">
+        <label htmlFor={`motivo-${cita.id}`}>Motivo</label>
+        <select
+          id={`motivo-${cita.id}`}
+          value={motivo}
+          aria-invalid={errores.reason ? true : undefined}
+          aria-describedby={errores.reason ? `error-motivo-${cita.id}` : undefined}
+          onChange={(e) => {
+            setMotivo(e.target.value as MotivoCancelacion | "");
+            setErrores(({ reason: _anterior, ...resto }) => resto);
+          }}
+        >
+          <option value="">Elige el motivo…</option>
+          {Object.entries(NOMBRE_MOTIVO).map(([valor, nombre]) => (
+            <option key={valor} value={valor}>
+              {nombre}
+            </option>
+          ))}
+        </select>
+        {errores.reason && (
+          <span className="error" id={`error-motivo-${cita.id}`}>
+            {errores.reason}
+          </span>
+        )}
+      </div>
+      <div className="campo">
+        <label htmlFor={`detalle-${cita.id}`}>Detalle (opcional)</label>
+        <input
+          id={`detalle-${cita.id}`}
+          type="text"
+          value={detalle}
+          maxLength={MAX_DETALLE}
+          aria-invalid={errores.note ? true : undefined}
+          aria-describedby={`ayuda-detalle-${cita.id}`}
+          onChange={(e) => {
+            setDetalle(e.target.value);
+            setErrores(({ note: _anterior, ...resto }) => resto);
+          }}
+        />
+        <span className="ayuda" id={`ayuda-detalle-${cita.id}`}>
+          Una línea, sin tildes. No escribas datos clínicos (síntomas, diagnósticos ni tratamientos).
+        </span>
+        {errores.note && <span className="error">{errores.note}</span>}
+      </div>
+      {general.map((mensaje) => (
+        <p key={mensaje} className="error" role="alert">
+          {mensaje}
+        </p>
+      ))}
+      <div className="acciones">
+        <button type="submit" disabled={guardando}>
+          {guardando ? "Cancelando…" : "Confirmar cancelación"}
+        </button>
+        <button type="button" className="secundario" onClick={alVolver} disabled={guardando}>
+          Volver
         </button>
       </div>
     </form>

@@ -1,11 +1,11 @@
-// Pruebas de la agenda y del formulario de cita (T18), con una API falsa en fetch.
+// Pruebas de la agenda y del formulario de cita (T18), y de reprogramar y cancelar (T19), con una API falsa en fetch.
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { diaValido, formatoDia, horaEn, hoyEnLaClinica, minutosDesde, sumarDias } from "./Agenda";
+import { diaValido, formatoDia, horaEn, hoyEnLaClinica, minutosDesde, sePuedeCambiar, sumarDias } from "./Agenda";
 import App from "./App";
 import type { CitaAgenda, Contacto, ContactoDetalle, PersonaServicio, Servicio } from "./api";
 
@@ -51,6 +51,8 @@ function cita(id: number, inicio: string, fin: string, cambios: Partial<CitaAgen
     status: "scheduled",
     version: 1,
     created_at: "2027-01-04T15:00:00-05:00",
+    cancel_reason: null,
+    cancel_note: null,
     contact_name: "Ana Lopez",
     service_name: "Botox",
     staff_email: P_PRO.email,
@@ -143,7 +145,10 @@ async function filas() {
     if (!encontrada) throw new Error("sin lista de citas");
     return encontrada as HTMLElement;
   });
-  return within(ul).getAllByRole("listitem").map((li) => li.textContent);
+  // Solo los datos de la cita, sin los botones ni el recuadro de cancelar (T19).
+  return within(ul)
+    .getAllByRole("listitem")
+    .map((li) => [...li.querySelectorAll(".cita__hora, .cita__contacto, .cita__meta")].map((e) => e.textContent).join(""));
 }
 
 // --- La agenda del día -------------------------------------------------------------------
@@ -417,6 +422,263 @@ describe("dar una cita", () => {
     // «Cambiar» vuelve a la búsqueda.
     await u.click(formulario.getByRole("button", { name: "Cambiar" }));
     expect(formulario.getByLabelText(/Contacto: busca/)).toBeTruthy();
+  });
+});
+
+// --- Reprogramar y cancelar (T19) --------------------------------------------------------------
+
+const puts = () => llamadas.filter((l) => l.metodo === "PUT" && l.ruta.startsWith("/api/appointments/"));
+const cancelaciones = () => llamadas.filter((l) => l.metodo === "POST" && l.ruta.endsWith("/cancel"));
+
+/** La fila de una cita por el nombre del contacto. */
+async function fila(nombre: string) {
+  const enlace = await screen.findByRole("link", { name: nombre });
+  return within(enlace.closest("li") as HTMLElement);
+}
+
+async function abrirReprogramar(nombre = "Ana Lopez", ruta?: string) {
+  const u = abrir(ruta);
+  await u.click((await fila(nombre)).getByRole("button", { name: /^Reprogramar/ }));
+  const formulario = within(await screen.findByRole("form", { name: "Reprogramar cita" }));
+  return { u, formulario };
+}
+
+describe("reprogramar y cancelar", () => {
+  it("solo las programadas que no han empezado tienen «Reprogramar» y «Cancelar cita»", async () => {
+    rutas["GET /api/appointments"] = agendaFalsa([
+      DE_ANA,
+      { ...DE_BEA, status: "cancelled", cancel_reason: "client_request", cancel_note: "Llamara otro dia" },
+    ]);
+    abrir();
+
+    const ana = await fila("Ana Lopez");
+    expect(ana.getByRole("button", { name: `Reprogramar: Ana Lopez, 9:30–10:30` })).toBeTruthy();
+    expect(ana.getByRole("button", { name: `Cancelar la cita: Ana Lopez, 9:30–10:30` })).toBeTruthy();
+    const bea = await fila("Bea Ruiz");
+    expect(bea.queryByRole("button")).toBeNull();
+    // Cancelada: atenuada (tachada por CSS) y con su motivo.
+    expect((await filas())[1]).toBe(`23:30–0:30 (12/01)Bea RuizPeel · ${P_ADMIN.email} · Cancelada (Lo pidió la clienta: Llamara otro dia)`);
+    expect(document.querySelectorAll("li.cita--cancelada")).toHaveLength(1);
+  });
+
+  it("una cita que ya ha empezado, realizada o no presentada no se puede cambiar", () => {
+    const ahora = new Date("2027-01-11T14:30:00Z"); // las 9:30 en Nueva York
+    expect(sePuedeCambiar(DE_ANA, ahora)).toBe(false); // empieza justo ahora
+    expect(sePuedeCambiar(DE_ANA, new Date("2027-01-11T14:29:00Z"))).toBe(true);
+    expect(sePuedeCambiar({ ...DE_ANA, status: "completed" }, new Date("2027-01-01T00:00:00Z"))).toBe(false);
+    expect(sePuedeCambiar({ ...DE_ANA, status: "no_show" }, new Date("2027-01-01T00:00:00Z"))).toBe(false);
+    expect(sePuedeCambiar({ ...DE_ANA, status: "cancelled" }, new Date("2027-01-01T00:00:00Z"))).toBe(false);
+  });
+
+  it("reprogramar abre el formulario con la cita: contacto y servicio fijos, lo demás elegido", async () => {
+    const { formulario } = await abrirReprogramar();
+
+    expect(formulario.getByText("Ana Lopez", { selector: "strong" })).toBeTruthy();
+    expect(formulario.queryByRole("button", { name: "Cambiar" })).toBeNull();
+    expect(formulario.getByText("Botox (1 h)", { selector: "strong" })).toBeTruthy();
+    expect(formulario.queryByLabelText("Servicio")).toBeNull();
+    expect((formulario.getByLabelText("Quién la realiza") as HTMLSelectElement).value).toBe("3");
+    expect((formulario.getByLabelText("Día") as HTMLInputElement).value).toBe("2027-01-11");
+    expect((formulario.getByLabelText("Hora") as HTMLSelectElement).value).toBe("9");
+    expect((formulario.getByLabelText("Minutos") as HTMLSelectElement).value).toBe("30");
+    // Su propia cita no ocupa a la persona ni da aviso al contacto.
+    expect(await formulario.findByText("No tiene otras citas ese día.")).toBeTruthy();
+    expect(formulario.queryByRole("status")).toBeNull();
+  });
+
+  it("guardar envía la hora, la persona y la versión, y lo anuncia", async () => {
+    const { u, formulario } = await abrirReprogramar();
+    rutas["PUT /api/appointments/1"] = () => ({
+      status: 200,
+      cuerpo: cita(1, "2027-01-12T11:15:00-05:00", "2027-01-12T12:15:00-05:00", { version: 2 }),
+    });
+
+    fireEvent.change(formulario.getByLabelText("Día"), { target: { value: "2027-01-12" } });
+    await u.selectOptions(formulario.getByLabelText("Hora"), "11");
+    await u.selectOptions(formulario.getByLabelText("Minutos"), "15");
+    await u.click(formulario.getByRole("button", { name: "Guardar cambios" }));
+
+    expect((await screen.findByRole("status")).textContent).toBe(
+      "Cita reprogramada: Ana Lopez, martes, 12 de enero de 2027, 11:15–12:15 (Botox)",
+    );
+    expect(puts()).toHaveLength(1);
+    expect(puts()[0].cuerpo).toEqual({ staff_id: 3, starts_at: "2027-01-12T11:15", version: 1 });
+    expect(puts()[0].headers["X-CSRF-Token"]).toBe("csrf-recepcion");
+    await waitFor(() => expect(screen.queryByRole("form", { name: "Reprogramar cita" })).toBeNull());
+    expect(diasPedidos().at(-1)).toBe("2027-01-12");
+  });
+
+  it("se puede cambiar a otra persona del servicio", async () => {
+    const { u, formulario } = await abrirReprogramar("Bea Ruiz");
+    rutas["PUT /api/appointments/2"] = () => ({ status: 200, cuerpo: { ...DE_BEA, staff_id: 3, version: 2 } });
+
+    await u.selectOptions(formulario.getByLabelText("Quién la realiza"), `${P_PRO.email} · Profesional`);
+    await u.click(formulario.getByRole("button", { name: "Guardar cambios" }));
+
+    await screen.findByText(/^Cita reprogramada: Bea Ruiz/);
+    expect(puts()[0].cuerpo).toEqual({ staff_id: 3, starts_at: "2027-01-11T23:30", version: 1 });
+  });
+
+  it("con un 409 lo dice, sigue abierto y el siguiente intento lleva la versión nueva", async () => {
+    const { u, formulario } = await abrirReprogramar();
+    rutas["PUT /api/appointments/1"] = () => ({
+      status: 409,
+      cuerpo: { detail: "Esta cita ha cambiado desde que la abriste. Revisa los datos y vuelve a intentarlo." },
+    });
+    // Otra persona la movió a las 9:45: la agenda recargada trae la versión 2.
+    rutas["GET /api/appointments"] = agendaFalsa([
+      { ...DE_ANA, starts_at: "2027-01-11T09:45:00-05:00", ends_at: "2027-01-11T10:45:00-05:00", version: 2 },
+    ]);
+
+    await u.click(formulario.getByRole("button", { name: "Guardar cambios" }));
+
+    expect((await formulario.findByRole("alert")).textContent).toBe(
+      "Esta cita ha cambiado desde que la abriste. Revisa los datos y vuelve a intentarlo.",
+    );
+    expect(screen.getByRole("form", { name: "Reprogramar cita" })).toBeTruthy();
+    await screen.findByText(/9:45–10:45/);
+    rutas["PUT /api/appointments/1"] = () => ({ status: 200, cuerpo: { ...DE_ANA, version: 3 } });
+    await u.click(formulario.getByRole("button", { name: "Guardar cambios" }));
+    await screen.findByText(/^Cita reprogramada/);
+    expect(puts().map((p) => (p.cuerpo as { version: number }).version)).toEqual([1, 2]);
+  });
+
+  it("si otra persona la canceló mientras tanto, se cierra y lo explica", async () => {
+    const { u, formulario } = await abrirReprogramar();
+    rutas["PUT /api/appointments/1"] = () => ({ status: 409, cuerpo: { detail: "La cita está «Cancelada»: ya no se puede cambiar" } });
+    rutas["GET /api/appointments"] = agendaFalsa([{ ...DE_ANA, status: "cancelled", cancel_reason: "clinic", version: 2 }]);
+
+    await u.click(formulario.getByRole("button", { name: "Guardar cambios" }));
+
+    expect(await screen.findByText("Esta cita ya no se puede reprogramar: está «Cancelada».")).toBeTruthy();
+    expect(screen.queryByRole("form", { name: "Reprogramar cita" })).toBeNull();
+  });
+
+  it("avisa si el contacto tiene otra cita a esa hora, con la duración de la cita y no la del servicio", async () => {
+    // El Botox dura ahora 30 min, pero la cita de Ana conserva sus 60. Ana tiene además un Peel a las 11:00.
+    rutas["GET /api/services"] = () => ({ status: 200, cuerpo: [{ ...BOTOX, duration_minutes: 30 }, PEEL] });
+    const peel = cita(4, "2027-01-11T11:00:00-05:00", "2027-01-11T11:30:00-05:00", { service_id: 12, service_name: "Peel", staff_id: 1, staff_email: P_ADMIN.email });
+    rutas["GET /api/appointments"] = agendaFalsa([DE_ANA, peel]);
+    // Ana sale dos veces en la lista: se abre por la dirección.
+    const u = abrir("/agenda?fecha=2027-01-11&reprogramar=1");
+    const formulario = within(await screen.findByRole("form", { name: "Reprogramar cita" }));
+
+    await u.selectOptions(formulario.getByLabelText("Hora"), "10");
+    await u.selectOptions(formulario.getByLabelText("Minutos"), "15");
+
+    // De 10:15 a 11:15 pisa el Peel de las 11:00 (con 30 min acabaría a las 10:45).
+    expect((await formulario.findByRole("status")).textContent).toMatch(/^Ana Lopez ya tiene otra cita a esa hora: 11:00–11:30 \(Peel/);
+  });
+
+  it("si el servicio se desactivó, lo avisa: hay que cancelarla y dar otra", async () => {
+    rutas["GET /api/appointments"] = agendaFalsa([{ ...DE_ANA, service_id: 11, service_name: "Facial", duration_minutes: 90, ends_at: "2027-01-11T11:00:00-05:00" }]);
+    const { formulario } = await abrirReprogramar();
+
+    expect(await formulario.findByText("El servicio está desactivado o nadie activo lo realiza: cancela la cita y da otra.")).toBeTruthy();
+  });
+
+  it("un 422 general de la API sale sobre el formulario", async () => {
+    const { u, formulario } = await abrirReprogramar();
+    rutas["PUT /api/appointments/1"] = () => ({
+      status: 422,
+      cuerpo: { detail: [{ loc: ["body"], msg: "El contacto está «Perdido»: reábrelo antes de cambiar la cita, o cancélala" }] },
+    });
+
+    await u.click(formulario.getByRole("button", { name: "Guardar cambios" }));
+
+    expect((await formulario.findByRole("alert")).textContent).toBe(
+      "El contacto está «Perdido»: reábrelo antes de cambiar la cita, o cancélala",
+    );
+  });
+
+  it("la dirección guarda la cita que se reprograma; «Volver» cierra sin enviar", async () => {
+    const u = abrir("/agenda?fecha=2027-01-11&reprogramar=1");
+    const formulario = within(await screen.findByRole("form", { name: "Reprogramar cita" }));
+    expect((formulario.getByLabelText("Minutos") as HTMLSelectElement).value).toBe("30");
+
+    await u.click(formulario.getByRole("button", { name: "Volver" }));
+
+    await waitFor(() => expect(screen.queryByRole("form", { name: "Reprogramar cita" })).toBeNull());
+    expect(puts()).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "Nueva cita" })).toBeTruthy();
+  });
+
+  it("cancelar pide el motivo y, con él, envía motivo, detalle y versión", async () => {
+    const u = abrir();
+    rutas["POST /api/appointments/1/cancel"] = () => ({
+      status: 200,
+      cuerpo: { ...DE_ANA, status: "cancelled", cancel_reason: "clinic", version: 2 },
+    });
+    await u.click((await fila("Ana Lopez")).getByRole("button", { name: /^Cancelar la cita/ }));
+    const recuadro = within(await screen.findByRole("form", { name: "Cancelar la cita" }));
+    expect(recuadro.getByText(/No escribas datos clínicos/)).toBeTruthy();
+
+    await u.click(recuadro.getByRole("button", { name: "Confirmar cancelación" }));
+    expect(recuadro.getByText("Elige el motivo")).toBeTruthy();
+    expect(cancelaciones()).toHaveLength(0);
+
+    await u.selectOptions(recuadro.getByLabelText("Motivo"), "Lo canceló la clínica");
+    await u.type(recuadro.getByLabelText("Detalle (opcional)"), "  Cierre por nieve ");
+    await u.click(recuadro.getByRole("button", { name: "Confirmar cancelación" }));
+
+    expect((await screen.findByRole("status")).textContent).toBe("Cita cancelada: Ana Lopez, 9:30–10:30 (Botox)");
+    expect(cancelaciones()[0].cuerpo).toEqual({ version: 1, reason: "clinic", note: "Cierre por nieve" });
+    expect(cancelaciones()[0].headers["X-CSRF-Token"]).toBe("csrf-recepcion");
+    await waitFor(() => expect(diasPedidos().filter((d) => d === "2027-01-11").length).toBeGreaterThan(1));
+  });
+
+  it("sin detalle, envía note null; «Volver» cierra el recuadro", async () => {
+    const u = abrir();
+    rutas["POST /api/appointments/1/cancel"] = () => ({ status: 200, cuerpo: { ...DE_ANA, status: "cancelled" } });
+    await u.click((await fila("Ana Lopez")).getByRole("button", { name: /^Cancelar la cita/ }));
+    let recuadro = within(await screen.findByRole("form", { name: "Cancelar la cita" }));
+    await u.click(recuadro.getByRole("button", { name: "Volver" }));
+    expect(screen.queryByRole("form", { name: "Cancelar la cita" })).toBeNull();
+
+    await u.click((await fila("Ana Lopez")).getByRole("button", { name: /^Cancelar la cita/ }));
+    recuadro = within(await screen.findByRole("form", { name: "Cancelar la cita" }));
+    await u.selectOptions(recuadro.getByLabelText("Motivo"), "Lo pidió la clienta");
+    await u.click(recuadro.getByRole("button", { name: "Confirmar cancelación" }));
+
+    await screen.findByText(/^Cita cancelada/);
+    expect(cancelaciones()[0].cuerpo).toEqual({ version: 1, reason: "client_request", note: null });
+  });
+
+  it("si otra persona la cambió (409), cierra el recuadro, avisa y recarga", async () => {
+    const u = abrir();
+    rutas["POST /api/appointments/1/cancel"] = () => ({
+      status: 409,
+      cuerpo: { detail: "Esta cita ha cambiado desde que la abriste. Revisa los datos y vuelve a intentarlo." },
+    });
+    await u.click((await fila("Ana Lopez")).getByRole("button", { name: /^Cancelar la cita/ }));
+    const recuadro = within(await screen.findByRole("form", { name: "Cancelar la cita" }));
+    await u.selectOptions(recuadro.getByLabelText("Motivo"), "Otro motivo");
+    const pedidasAntes = diasPedidos().length;
+
+    await u.click(recuadro.getByRole("button", { name: "Confirmar cancelación" }));
+
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Esta cita ha cambiado desde que la abriste. Revisa los datos y vuelve a intentarlo.",
+    );
+    expect(screen.queryByRole("form", { name: "Cancelar la cita" })).toBeNull();
+    await waitFor(() => expect(diasPedidos().length).toBeGreaterThan(pedidasAntes));
+  });
+
+  it("un detalle no válido (422) sale junto al campo", async () => {
+    const u = abrir();
+    rutas["POST /api/appointments/1/cancel"] = () => ({
+      status: 422,
+      cuerpo: { detail: [{ loc: ["body", "note"], msg: "No se permiten tildes ni caracteres especiales (á, ñ, ü…)" }] },
+    });
+    await u.click((await fila("Ana Lopez")).getByRole("button", { name: /^Cancelar la cita/ }));
+    const recuadro = within(await screen.findByRole("form", { name: "Cancelar la cita" }));
+    await u.selectOptions(recuadro.getByLabelText("Motivo"), "Otro motivo");
+    await u.type(recuadro.getByLabelText("Detalle (opcional)"), "Llamará");
+
+    await u.click(recuadro.getByRole("button", { name: "Confirmar cancelación" }));
+
+    expect(await recuadro.findByText("No se permiten tildes ni caracteres especiales (á, ñ, ü…)")).toBeTruthy();
+    expect(screen.getByRole("form", { name: "Cancelar la cita" })).toBeTruthy();
   });
 });
 
