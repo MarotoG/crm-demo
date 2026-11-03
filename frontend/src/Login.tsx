@@ -5,7 +5,8 @@ import { Navigate } from "react-router";
 
 import { ErrorApi } from "./api";
 import EstadoSistema from "./EstadoSistema";
-import { AREA_DE, useSesion } from "./sesion";
+import { inicioDe } from "./permisos";
+import { useSesion } from "./sesion";
 
 export default function Login() {
   const { estado, entrar } = useSesion();
@@ -15,8 +16,8 @@ export default function Login() {
   const [error, setError] = useState<string | null>(null);
 
   if (estado.tipo === "comprobando") return <p className="pagina">Comprobando la sesión…</p>;
-  // Con sesión, cada rol va a su área.
-  if (estado.tipo === "dentro") return <Navigate to={AREA_DE[estado.usuario.role]} replace />;
+  // Con sesión, cada rol va a su página de inicio (T18: la agenda para admin y recepción).
+  if (estado.tipo === "dentro") return <Navigate to={inicioDe(estado.usuario.role)} replace />;
 
   async function enviar(evento: FormEvent<HTMLFormElement>) {
     evento.preventDefault();

@@ -1,14 +1,14 @@
 // Ficha de un contacto (T13): sus datos, quién lo creó y quién lo cambió por última vez,
-// y «Editar». Dirección propia (/recepcion/contactos/7, /admin/contactos/7): se puede
+// y «Editar». Dirección propia (/contactos/7 desde T18; antes /recepcion/… y /admin/…): se puede
 // recargar y ahí irán después sus citas y seguimientos. En T14, el responsable y los
-// botones de estado comercial.
+// botones de estado comercial. En T18, «Dar cita», que abre el formulario de la agenda con el contacto.
 //
 // Bloqueo optimista: la ficha guarda la versión que leyó y la envía al guardar o al cambiar
 // el estado. Si otra persona guardó antes, la API responde 409; entonces se pide la ficha
 // actual y, si su versión ha cambiado, se muestra con un aviso en vez de pisar el cambio ajeno.
 
 import { useCallback, useEffect, useState } from "react";
-import { Link, useParams } from "react-router";
+import { Link, useNavigate, useParams } from "react-router";
 
 import {
   actualizarContacto,
@@ -28,14 +28,14 @@ import {
   NOMBRE_ORIGEN,
   type DatosFormulario,
 } from "./Contactos";
-import { AREA_DE, useSesion } from "./sesion";
+import { useSesion } from "./sesion";
 
 export const AVISO_OTRA_VERSION =
   "Otra persona ha cambiado esta ficha mientras la editabas. Se muestran los datos actuales; si hace falta, vuelve a editarla.";
 
 // Cambios de estado a mano (decisión T14), los mismos que permite la API: se avanza de Nuevo a
 // Contactado, Perdido vale desde cualquiera y un Perdido se reabre como Contactado. «Cita
-// agendada» y «Cliente» los pondrán las citas.
+// agendada» la pone dar una cita (T16) y «Cliente» la pondrá marcar Realizada la primera.
 const ACCION_CONTACTADO = { destino: "contacted", texto: "Marcar como contactado" } as const;
 const ACCION_PERDIDO = { destino: "lost", texto: "Marcar como perdido" } as const;
 export const ACCIONES_DE_ESTADO: Record<EstadoContacto, { destino: EstadoContacto; texto: string }[]> = {
@@ -109,7 +109,6 @@ export default function FichaContacto() {
   }, [contactoId, intento, tratarError]);
 
   if (sesion.tipo !== "dentro") return null;
-  const area = AREA_DE[sesion.usuario.role];
   const csrf = sesion.usuario.csrf_token;
 
   /** Ante un 409: si la versión ha cambiado, se muestra la ficha actual con el aviso. */
@@ -158,7 +157,7 @@ export default function FichaContacto() {
   return (
     <section className="tarjeta" aria-labelledby="titulo-ficha">
       <p>
-        <Link to={area}>← Volver a contactos</Link>
+        <Link to="/contactos">← Volver a contactos</Link>
       </p>
       {estado.tipo === "cargando" && <p>Cargando la ficha…</p>}
       {estado.tipo === "no-existe" && <h2 id="titulo-ficha">Este contacto no existe</h2>}
@@ -221,6 +220,7 @@ function Ficha({
   alConflicto: () => Promise<boolean>;
   alCambiarEstado: (destino: EstadoContacto) => void;
 }) {
+  const navegar = useNavigate();
   return (
     <>
       <h2 id="titulo-ficha">
@@ -301,7 +301,13 @@ function Ficha({
             )}
           </dl>
           <div className="acciones">
-            <button type="button" onClick={alEditar} disabled={cambiandoEstado}>
+            {/* Un Perdido no puede recibir cita (T16): primero hay que reabrirlo. */}
+            {ficha.status !== "lost" && (
+              <button type="button" onClick={() => navegar(`/agenda?nueva=1&contacto=${ficha.id}`)} disabled={cambiandoEstado}>
+                Dar cita
+              </button>
+            )}
+            <button type="button" className={ficha.status === "lost" ? undefined : "secundario"} onClick={alEditar} disabled={cambiandoEstado}>
               Editar
             </button>
             {ACCIONES_DE_ESTADO[ficha.status].map(({ destino, texto }) => (
@@ -317,8 +323,9 @@ function Ficha({
             ))}
           </div>
           {(ficha.status === "new" || ficha.status === "contacted") && (
-            <p className="ayuda">«Cita agendada» y «Cliente» se pondrán solos al gestionar sus citas.</p>
+            <p className="ayuda">Al darle una cita pasa solo a «Cita agendada»; «Cliente» llegará al marcar Realizada la primera.</p>
           )}
+          {ficha.status === "lost" && <p className="ayuda">Para darle una cita, reábrelo primero.</p>}
         </>
       )}
     </>

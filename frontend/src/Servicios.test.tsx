@@ -62,7 +62,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function abrir(ruta = "/admin") {
+function abrir(ruta = "/servicios") {
   render(
     <MemoryRouter initialEntries={[ruta]}>
       <App />
@@ -96,7 +96,7 @@ describe("lista de servicios", () => {
   it("sin servicios, invita a añadir el primero", async () => {
     rutas["GET /api/services"] = () => ({ status: 200, cuerpo: [] });
     usuario = RECEPCION;
-    abrir("/recepcion");
+    abrir("/servicios");
 
     expect(await (await seccion()).findByText("Todavía no hay servicios. Añade el primero con «Añadir servicio».")).toBeTruthy();
   });
@@ -116,7 +116,7 @@ describe("añadir servicio", () => {
     const original = rutas["GET /api/services"];
     rutas["GET /api/services"] = (c) => (creado ? { status: 200, cuerpo: [{ ...BOTOX, id: 20, name: "Lips" }] } : original(c));
     usuario = RECEPCION;
-    const u = abrir("/recepcion");
+    const u = abrir("/servicios");
     const s = await seccion();
 
     await u.click(s.getByRole("button", { name: "Añadir servicio" }));

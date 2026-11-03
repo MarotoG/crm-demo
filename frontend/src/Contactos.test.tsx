@@ -83,7 +83,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function abrir(ruta = "/recepcion") {
+function abrir(ruta = "/contactos") {
   render(
     <MemoryRouter initialEntries={[ruta]}>
       <App />
@@ -149,13 +149,13 @@ describe("lista de contactos", () => {
     ).toBeTruthy();
   });
 
-  it("el admin también ve los contactos en su área", async () => {
+  it("el admin también ve los contactos, en la misma dirección (T18)", async () => {
     usuario = ADMIN;
     contactos = () => ({ status: 200, cuerpo: { total: 1, items: [contacto(1)] } });
-    abrir("/admin");
+    abrir("/contactos");
 
-    expect(await screen.findByRole("heading", { name: "Usuarios" })).toBeTruthy();
-    expect(await screen.findByText("Ana Smith")).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Contactos" })).toBeTruthy();
+    expect((await screen.findByRole("link", { name: "Ana Smith" })).getAttribute("href")).toBe("/contactos/1");
   });
 
   it("si la API falla se puede reintentar", async () => {

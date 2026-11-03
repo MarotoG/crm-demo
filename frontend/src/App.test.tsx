@@ -26,6 +26,8 @@ beforeEach(() => {
     "GET /api/auth/me": () => ({ status: 401, cuerpo: { detail: "No autenticado" } }),
     "GET /api/contacts": () => ({ status: 200, cuerpo: { total: 0, items: [] } }), // T12: recepción y admin la piden
     "GET /api/services": () => ({ status: 200, cuerpo: [] }), // T15: recepción, admin y profesional la piden
+    "GET /api/services/staff": () => ({ status: 200, cuerpo: [] }), // T18: el filtro de la agenda
+    "GET /api/appointments": () => ({ status: 200, cuerpo: [] }), // T18: la agenda, inicio de admin y recepción
   };
   vi.stubGlobal(
     "fetch",
@@ -75,7 +77,7 @@ const pidio = (clave: string) => llamadas.some((l) => l.clave === clave);
 
 describe("login", () => {
   it("sin sesión, entrar directamente en un área lleva al login", async () => {
-    abrir("/admin");
+    abrir("/agenda");
 
     expect(await screen.findByRole("heading", { name: "Entrar" })).toBeTruthy();
     expect(pidio("GET /api/users")).toBe(false);
@@ -91,13 +93,13 @@ describe("login", () => {
     ).toBeTruthy();
   });
 
-  it("un login correcto lleva al área del rol y envía email y contraseña", async () => {
+  it("un login correcto lleva al inicio del rol (la agenda) y envía email y contraseña", async () => {
     rutas["POST /api/auth/login"] = () => ({ status: 200, cuerpo: RECEPCION });
     abrir("/login");
 
     await rellenarLogin();
 
-    expect(await screen.findByRole("heading", { name: "Contactos" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Agenda" })).toBeTruthy();
     const login = llamadas.find((l) => l.clave === "POST /api/auth/login");
     expect(login?.cuerpo).toEqual({ email: RECEPCION.email, password: "contraseña-larga" });
     expect(login?.headers["X-CSRF-Token"]).toBeUndefined(); // el login no lleva token
@@ -118,9 +120,12 @@ describe("login", () => {
   });
 
   it("sin conexión con el servidor, lo dice", async () => {
+    // El fallo de red, atado a la petición de login: con «la siguiente petición» podía quedárselo la
+    // comprobación de salud de la pantalla de login si salía justo después (prueba intermitente).
+    rutas["POST /api/auth/login"] = () => {
+      throw new TypeError("Failed to fetch");
+    };
     abrir("/login");
-    await screen.findByLabelText("Email");
-    vi.mocked(fetch).mockRejectedValueOnce(new TypeError("Failed to fetch"));
 
     await rellenarLogin();
 
@@ -131,19 +136,55 @@ describe("login", () => {
     conSesion(RECEPCION);
     abrir("/");
 
-    expect(await screen.findByRole("heading", { name: "Contactos" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Agenda" })).toBeTruthy();
     expect(screen.getByText(/recepcion@prueba\.example\.com · Recepción/)).toBeTruthy();
   });
 });
 
-describe("áreas por rol", () => {
-  it("recepción en /admin ve «sin acceso» y no se piden los usuarios", async () => {
+describe("secciones por rol (T18)", () => {
+  it("recepción en /usuarios ve «sin acceso» y no se piden los usuarios", async () => {
     conSesion(RECEPCION);
-    abrir("/admin");
+    abrir("/usuarios");
 
     expect(await screen.findByRole("heading", { name: "No tienes acceso a esta área" })).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Ir a tu área" }).getAttribute("href")).toBe("/recepcion");
+    expect(screen.getByRole("link", { name: "Ir a tu área" }).getAttribute("href")).toBe("/agenda");
     expect(pidio("GET /api/users")).toBe(false);
+  });
+
+  it.each([
+    [RECEPCION, ["Agenda", "Contactos", "Servicios"]],
+    [ADMIN, ["Agenda", "Contactos", "Servicios", "Usuarios"]],
+  ])("la barra de secciones depende del rol (%#)", async (cuenta, secciones) => {
+    conSesion(cuenta);
+    abrir("/agenda");
+
+    const barra = await screen.findByRole("navigation", { name: "Secciones" });
+    expect(within(barra).getAllByRole("link").map((a) => a.textContent)).toEqual(secciones);
+    expect(within(barra).getByRole("link", { name: "Agenda" }).getAttribute("aria-current")).toBe("page");
+  });
+
+  it("profesional y cliente, con una sola sección, no tienen barra", async () => {
+    conSesion({ ...RECEPCION, role: "professional" });
+    abrir("/");
+
+    expect(await screen.findByRole("heading", { name: "Área de profesional" })).toBeTruthy();
+    expect(screen.queryByRole("navigation", { name: "Secciones" })).toBeNull();
+  });
+
+  it.each(["/admin", "/recepcion"])("la dirección de antes de T18 (%s) lleva al inicio del rol", async (ruta) => {
+    conSesion(RECEPCION);
+    abrir(ruta);
+
+    expect(await screen.findByRole("heading", { name: "Agenda" })).toBeTruthy();
+  });
+
+  it("de una sección a otra con la barra", async () => {
+    conSesion(RECEPCION);
+    abrir("/agenda");
+
+    await userEvent.setup().click(await screen.findByRole("link", { name: "Contactos" }));
+
+    expect(await screen.findByRole("heading", { name: "Contactos" })).toBeTruthy();
   });
 
   it("el admin ve la lista real de usuarios", async () => {
@@ -155,7 +196,7 @@ describe("áreas por rol", () => {
         { id: 2, email: RECEPCION.email, role: "reception", active: false },
       ],
     });
-    abrir("/admin");
+    abrir("/usuarios");
 
     const tabla = await screen.findByRole("table");
     const filas = within(tabla).getAllByRole("row");
@@ -166,7 +207,7 @@ describe("áreas por rol", () => {
   it("si la API dice 403 en /api/users, se muestra el mensaje y se puede reintentar", async () => {
     conSesion(ADMIN);
     rutas["GET /api/users"] = () => ({ status: 403, cuerpo: { detail: "Permiso denegado" } });
-    abrir("/admin");
+    abrir("/usuarios");
 
     expect((await screen.findByRole("alert")).textContent).toBe("Permiso denegado");
     rutas["GET /api/users"] = () => ({ status: 200, cuerpo: [] });
@@ -177,7 +218,7 @@ describe("áreas por rol", () => {
   it("si la sesión caduca en mitad del uso, vuelve al login con un aviso", async () => {
     conSesion(ADMIN);
     rutas["GET /api/users"] = () => ({ status: 401, cuerpo: { detail: "No autenticado" } });
-    abrir("/admin");
+    abrir("/usuarios");
 
     expect(await screen.findByText("Tu sesión ha caducado. Vuelve a entrar.")).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Entrar" })).toBeTruthy();
@@ -194,7 +235,7 @@ describe("cerrar sesión", () => {
   it("envía el token CSRF y vuelve al login", async () => {
     conSesion(RECEPCION);
     rutas["POST /api/auth/logout"] = () => ({ status: 204 });
-    abrir("/recepcion");
+    abrir("/agenda");
 
     await userEvent.setup().click(await screen.findByRole("button", { name: "Cerrar sesión" }));
 
@@ -206,12 +247,12 @@ describe("cerrar sesión", () => {
   it("si el servidor no confirma el cierre, sigue dentro y lo avisa", async () => {
     conSesion(RECEPCION);
     rutas["POST /api/auth/logout"] = () => ({ status: 503, cuerpo: { detail: "Servicio no disponible" } });
-    abrir("/recepcion");
+    abrir("/agenda");
 
     await userEvent.setup().click(await screen.findByRole("button", { name: "Cerrar sesión" }));
 
     expect((await screen.findByRole("alert")).textContent).toMatch(/^No se pudo cerrar la sesión/);
-    expect(screen.getByRole("heading", { name: "Contactos" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Agenda" })).toBeTruthy();
   });
 
   it("con un token CSRF desfasado (403), pide uno nuevo y reintenta una vez", async () => {
@@ -219,7 +260,7 @@ describe("cerrar sesión", () => {
     let intentos = 0;
     rutas["POST /api/auth/logout"] = () =>
       ++intentos === 1 ? { status: 403, cuerpo: { detail: "Token CSRF ausente o no válido" } } : { status: 204 };
-    abrir("/recepcion");
+    abrir("/agenda");
     await screen.findByRole("button", { name: "Cerrar sesión" });
     conSesion({ ...RECEPCION, csrf_token: "csrf-nuevo" });
 

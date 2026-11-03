@@ -87,7 +87,7 @@ const dato = (nombre: string) => screen.getByText(nombre, { selector: "dt" }).ne
 
 describe("ver la ficha", () => {
   it("desde la lista, el nombre lleva a su ficha con los datos legibles", async () => {
-    const u = abrir("/recepcion");
+    const u = abrir("/contactos");
 
     await u.click(await screen.findByRole("link", { name: "Ana Smith" }));
 
@@ -100,28 +100,37 @@ describe("ver la ficha", () => {
     expect(screen.queryByText("Último cambio")).toBeNull(); // versión 1: nadie la ha cambiado
   });
 
-  it("la dirección de la ficha se puede abrir directamente (recargar) y el admin tiene la suya", async () => {
+  it("la dirección de la ficha se puede abrir directamente (recargar), también el admin", async () => {
     usuario = ADMIN;
-    abrir("/admin/contactos/7");
+    abrir("/contactos/7");
 
     expect(await screen.findByRole("heading", { name: "Ana Smith" })).toBeTruthy();
-    expect(screen.getByRole("link", { name: "← Volver a contactos" }).getAttribute("href")).toBe("/admin");
+    expect(screen.getByRole("link", { name: "← Volver a contactos" }).getAttribute("href")).toBe("/contactos");
   });
 
-  it("recepción no entra en la ficha del área de admin", async () => {
-    abrir("/admin/contactos/7");
+  it.each(["/admin/contactos/7", "/recepcion/contactos/7"])("la dirección de antes de T18 (%s) lleva a la ficha", async (ruta) => {
+    abrir(ruta);
+
+    expect(await screen.findByRole("heading", { name: "Ana Smith" })).toBeTruthy();
+    expect(llamadas.some((l) => l.ruta === "/api/contacts/7")).toBe(true);
+  });
+
+  it.each(["professional", "client"] as const)("una cuenta %s no ve la ficha ni la pide", async (role) => {
+    usuario = { ...RECEPCION, role };
+    abrir("/contactos/7");
 
     expect(await screen.findByText("No tienes acceso a esta área")).toBeTruthy();
+    expect(llamadas.some((l) => l.ruta === "/api/contacts/7")).toBe(false);
   });
 
   it("un contacto que no existe (404) lo dice", async () => {
-    abrir("/recepcion/contactos/8");
+    abrir("/contactos/8");
 
     expect(await screen.findByRole("heading", { name: "Este contacto no existe" })).toBeTruthy();
   });
 
   it("un id que no es un número ni se pregunta a la API", async () => {
-    abrir("/recepcion/contactos/abc");
+    abrir("/contactos/abc");
 
     expect(await screen.findByRole("heading", { name: "Este contacto no existe" })).toBeTruthy();
     expect(llamadas.some((l) => l.ruta.startsWith("/api/contacts/"))).toBe(false);
@@ -129,7 +138,7 @@ describe("ver la ficha", () => {
 
   it("si la sesión caduca al abrir la ficha, vuelve al login con un aviso", async () => {
     rutas["GET /api/contacts/7"] = () => ({ status: 401, cuerpo: { detail: "No autenticado" } });
-    abrir("/recepcion/contactos/7");
+    abrir("/contactos/7");
 
     expect(await screen.findByText("Tu sesión ha caducado. Vuelve a entrar.")).toBeTruthy();
   });
@@ -148,7 +157,7 @@ describe("editar", () => {
         updated_by_email: "recepcion@prueba.example.com",
       },
     });
-    const u = abrir("/recepcion/contactos/7");
+    const u = abrir("/contactos/7");
     await u.click(await screen.findByRole("button", { name: "Editar" }));
 
     expect((await screen.findByLabelText("Nombre") as HTMLInputElement).value).toBe("Ana");
@@ -177,7 +186,7 @@ describe("editar", () => {
   it("si otra persona guardó antes (409 y versión nueva), muestra la ficha actual con un aviso", async () => {
     const deOtraPersona = { ...ANA, last_name: "Brown", version: 2, updated_by_email: "admin@prueba.example.com" };
     rutas["PUT /api/contacts/7"] = () => ({ status: 409, cuerpo: { detail: "Otra persona ha cambiado esta ficha mientras la editabas" } });
-    const u = abrir("/recepcion/contactos/7");
+    const u = abrir("/contactos/7");
     await u.click(await screen.findByRole("button", { name: "Editar" }));
     await u.type(screen.getByLabelText("Nombre"), "bel");
     rutas["GET /api/contacts/7"] = () => ({ status: 200, cuerpo: deOtraPersona });
@@ -197,7 +206,7 @@ describe("editar", () => {
       (cuerpo as { version: number }).version === version
         ? { status: 200, cuerpo: { ...ANA, version: version + 1 } }
         : { status: 409, cuerpo: { detail: "Otra persona ha cambiado esta ficha mientras la editabas" } };
-    const u = abrir("/recepcion/contactos/7");
+    const u = abrir("/contactos/7");
     await u.click(await screen.findByRole("button", { name: "Editar" }));
     version = 2; // alguien guarda mientras tanto
     await u.click(screen.getByRole("button", { name: "Guardar cambios" }));
@@ -212,7 +221,7 @@ describe("editar", () => {
 
   it("un duplicado (409 con la misma versión) se explica en el formulario, que sigue abierto", async () => {
     rutas["PUT /api/contacts/7"] = () => ({ status: 409, cuerpo: { detail: "Ya existe un contacto con ese nombre, apellidos y email" } });
-    const u = abrir("/recepcion/contactos/7");
+    const u = abrir("/contactos/7");
     await u.click(await screen.findByRole("button", { name: "Editar" }));
 
     await u.click(screen.getByRole("button", { name: "Guardar cambios" }));
@@ -222,7 +231,7 @@ describe("editar", () => {
   });
 
   it("con tildes no se envía y sale el aviso", async () => {
-    const u = abrir("/recepcion/contactos/7");
+    const u = abrir("/contactos/7");
     await u.click(await screen.findByRole("button", { name: "Editar" }));
     await u.clear(screen.getByLabelText("Nombre"));
     await u.type(screen.getByLabelText("Nombre"), "Ánna");
@@ -234,7 +243,7 @@ describe("editar", () => {
   });
 
   it("cancelar vuelve a la ficha sin enviar nada", async () => {
-    const u = abrir("/recepcion/contactos/7");
+    const u = abrir("/contactos/7");
     await u.click(await screen.findByRole("button", { name: "Editar" }));
     await u.type(screen.getByLabelText("Nombre"), "bel");
 
@@ -261,26 +270,26 @@ describe("estado comercial y responsable (T14)", () => {
       .filter((t) => t !== "Cerrar sesión");
 
   it("muestra el responsable, o «Sin responsable»", async () => {
-    abrir("/recepcion/contactos/7");
+    abrir("/contactos/7");
     expect(await screen.findByRole("heading", { name: "Ana Smith" })).toBeTruthy();
     expect(dato("Responsable")).toBe("recepcion@prueba.example.com");
 
     cleanup();
     rutas["GET /api/contacts/7"] = () => ({ status: 200, cuerpo: { ...ANA, owner_id: null, owner_email: null } });
-    abrir("/recepcion/contactos/7");
+    abrir("/contactos/7");
     await screen.findByRole("heading", { name: "Ana Smith" });
     expect(dato("Responsable")).toBe("Sin responsable");
   });
 
   it.each([
-    ["new", ["Editar", "Marcar como contactado", "Marcar como perdido"]],
-    ["contacted", ["Editar", "Marcar como perdido"]],
-    ["scheduled", ["Editar", "Marcar como perdido"]],
-    ["client", ["Editar", "Marcar como perdido"]],
+    ["new", ["Dar cita", "Editar", "Marcar como contactado", "Marcar como perdido"]],
+    ["contacted", ["Dar cita", "Editar", "Marcar como perdido"]],
+    ["scheduled", ["Dar cita", "Editar", "Marcar como perdido"]],
+    ["client", ["Dar cita", "Editar", "Marcar como perdido"]],
     ["lost", ["Editar", "Reabrir (pasa a Contactado)"]],
   ] as const)("en «%s» solo ofrece los cambios permitidos", async (estado, esperados) => {
     rutas["GET /api/contacts/7"] = () => ({ status: 200, cuerpo: { ...ANA, status: estado } });
-    abrir("/recepcion/contactos/7");
+    abrir("/contactos/7");
     await screen.findByRole("heading", { name: "Ana Smith" });
 
     expect(botones()).toEqual(esperados);
@@ -293,7 +302,7 @@ describe("estado comercial y responsable (T14)", () => {
     });
     // Versión 3: la que se leyó, no la primera.
     rutas["GET /api/contacts/7"] = () => ({ status: 200, cuerpo: { ...ANA, version: 3 } });
-    const u = abrir("/recepcion/contactos/7");
+    const u = abrir("/contactos/7");
 
     await u.click(await screen.findByRole("button", { name: "Marcar como contactado" }));
 
@@ -302,12 +311,12 @@ describe("estado comercial y responsable (T14)", () => {
     expect(cambiosDeEstado()).toHaveLength(1);
     expect(cambiosDeEstado()[0].cuerpo).toEqual({ status: "contacted", version: 3 });
     expect(cambiosDeEstado()[0].headers["X-CSRF-Token"]).toBe("csrf-recepcion");
-    expect(botones()).toEqual(["Editar", "Marcar como perdido"]);
+    expect(botones()).toEqual(["Dar cita", "Editar", "Marcar como perdido"]);
   });
 
   it("si otra persona cambió la ficha antes (409), muestra la actual con el aviso", async () => {
     rutas["PUT /api/contacts/7/status"] = () => ({ status: 409, cuerpo: { detail: "Otra persona ha cambiado esta ficha mientras la editabas" } });
-    const u = abrir("/recepcion/contactos/7");
+    const u = abrir("/contactos/7");
     const boton = await screen.findByRole("button", { name: "Marcar como perdido" });
     // Mientras se miraba la ficha, otra persona la pasó a Contactado.
     rutas["GET /api/contacts/7"] = () => ({ status: 200, cuerpo: { ...ANA, status: "contacted", version: 2 } });
@@ -322,7 +331,7 @@ describe("estado comercial y responsable (T14)", () => {
       status: 422,
       cuerpo: { detail: [{ loc: ["body", "status"], msg: "No se puede pasar de «Perdido» a «Perdido»" }] },
     });
-    const u = abrir("/recepcion/contactos/7");
+    const u = abrir("/contactos/7");
 
     await u.click(await screen.findByRole("button", { name: "Marcar como perdido" }));
 
@@ -335,7 +344,7 @@ describe("estado comercial y responsable (T14)", () => {
       status: 200,
       cuerpo: { ...ANA, ...(cuerpo as object), owner_email: "admin@prueba.example.com", version: 2 },
     });
-    const u = abrir("/recepcion/contactos/7");
+    const u = abrir("/contactos/7");
     await u.click(await screen.findByRole("button", { name: "Editar" }));
 
     const selector = (await screen.findByLabelText("Responsable")) as HTMLSelectElement;
@@ -355,7 +364,7 @@ describe("estado comercial y responsable (T14)", () => {
 
   it("«Sin responsable» envía null", async () => {
     rutas["PUT /api/contacts/7"] = (cuerpo) => ({ status: 200, cuerpo: { ...ANA, ...(cuerpo as object), owner_email: null, version: 2 } });
-    const u = abrir("/recepcion/contactos/7");
+    const u = abrir("/contactos/7");
     await u.click(await screen.findByRole("button", { name: "Editar" }));
 
     await u.selectOptions(await screen.findByLabelText("Responsable"), "");
@@ -367,7 +376,7 @@ describe("estado comercial y responsable (T14)", () => {
 
   it("un responsable que ya no puede serlo sigue en la lista para no cambiarlo sin querer", async () => {
     rutas["GET /api/contacts/7"] = () => ({ status: 200, cuerpo: { ...ANA, owner_id: 5, owner_email: "baja@prueba.example.com" } });
-    const u = abrir("/recepcion/contactos/7");
+    const u = abrir("/contactos/7");
     await u.click(await screen.findByRole("button", { name: "Editar" }));
 
     const selector = (await screen.findByLabelText("Responsable")) as HTMLSelectElement;
@@ -381,7 +390,7 @@ describe("estado comercial y responsable (T14)", () => {
       status: 422,
       cuerpo: { detail: [{ loc: ["body", "owner_id"], msg: "El responsable debe ser una cuenta activa de recepción o administración" }] },
     });
-    const u = abrir("/recepcion/contactos/7");
+    const u = abrir("/contactos/7");
     await u.click(await screen.findByRole("button", { name: "Editar" }));
     await u.selectOptions(await screen.findByLabelText("Responsable"), "1");
 
@@ -393,7 +402,7 @@ describe("estado comercial y responsable (T14)", () => {
 
   it("si no se puede cargar la lista de responsables, se explica y se puede reintentar", async () => {
     rutas["GET /api/contacts/owners"] = () => ({ status: 503 });
-    const u = abrir("/recepcion/contactos/7");
+    const u = abrir("/contactos/7");
     await u.click(await screen.findByRole("button", { name: "Editar" }));
 
     expect((await screen.findByRole("alert")).textContent).toMatch(/No se pudo cargar la lista de responsables/);

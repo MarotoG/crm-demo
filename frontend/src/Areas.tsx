@@ -1,16 +1,16 @@
-// Áreas por rol (T10). Ocultar o mostrar un área no protege nada: quien decide es la API
-// (403 en /api/users para quien no es admin). Aquí solo se evita pedir datos sin sentido
-// y se explica al usuario dónde está.
+// Estructura común de las páginas con sesión (T10): cabecera, barra de secciones (T18) y la
+// protección de cada sección. Qué ve cada rol lo decide permisos.ts. Ocultar o mostrar una
+// sección no protege nada: quien decide es la API (403). Aquí solo se evita pedir datos sin
+// sentido y se explica al usuario dónde está lo suyo.
 
 import { useEffect, useState, type ReactNode } from "react";
-import { Link, Navigate, Outlet } from "react-router";
+import { Link, Navigate, NavLink, Outlet, useParams } from "react-router";
 
-import { ErrorApi, listarUsuarios, type Rol, type UsuarioAdmin } from "./api";
-import Contactos from "./Contactos";
-import Servicios from "./Servicios";
-import { AREA_DE, NOMBRE_ROL, useSesion } from "./sesion";
+import { ErrorApi, listarUsuarios, type UsuarioAdmin } from "./api";
+import { inicioDe, puede, SECCIONES, seccionesDe, type Seccion } from "./permisos";
+import { NOMBRE_ROL, useSesion } from "./sesion";
 
-/** Exige sesión: sin ella, al login. Con ella, la cabecera común y el área pedida. */
+/** Exige sesión: sin ella, al login. Con ella, la cabecera común y la sección pedida. */
 export function RutaProtegida() {
   const { estado } = useSesion();
   if (estado.tipo === "comprobando") return <p className="pagina">Comprobando la sesión…</p>;
@@ -25,16 +25,18 @@ export function RutaProtegida() {
   );
 }
 
-/** Solo muestra su contenido al rol indicado; a los demás, un aviso y un enlace a su área. */
-export function SoloRol({ rol, children }: { rol: Rol; children: ReactNode }) {
+/** Solo muestra la sección a quien puede verla; a los demás, un aviso y un enlace a su inicio. */
+export function ConPermiso({ seccion, children }: { seccion: Seccion; children: ReactNode }) {
   const { estado } = useSesion();
   if (estado.tipo !== "dentro") return null; // RutaProtegida ya lo ha resuelto
-  if (estado.usuario.role !== rol) {
+  const rol = estado.usuario.role;
+  if (!puede(rol, seccion)) {
     return (
       <section className="tarjeta">
         <h2>No tienes acceso a esta área</h2>
         <p>
-          Esta área es de {NOMBRE_ROL[rol].toLowerCase()}. <Link to={AREA_DE[estado.usuario.role]}>Ir a tu área</Link>
+          Tu cuenta ({NOMBRE_ROL[rol].toLowerCase()}) no puede ver «{SECCIONES[seccion].nombre}».{" "}
+          <Link to={inicioDe(rol)}>Ir a tu área</Link>
         </p>
       </section>
     );
@@ -46,7 +48,14 @@ export function SoloRol({ rol, children }: { rol: Rol; children: ReactNode }) {
 export function Inicio() {
   const { estado } = useSesion();
   if (estado.tipo === "comprobando") return <p className="pagina">Comprobando la sesión…</p>;
-  return <Navigate to={estado.tipo === "dentro" ? AREA_DE[estado.usuario.role] : "/login"} replace />;
+  return <Navigate to={estado.tipo === "dentro" ? inicioDe(estado.usuario.role) : "/login"} replace />;
+}
+
+/** Direcciones de antes de T18 (/admin, /recepcion/contactos/7…): llevan a la nueva, para que
+ * no se rompa un enlace guardado. */
+export function RedirigirFicha() {
+  const { id } = useParams();
+  return <Navigate to={`/contactos/${id}`} replace />;
 }
 
 function Cabecera() {
@@ -54,6 +63,7 @@ function Cabecera() {
   const [saliendo, setSaliendo] = useState(false);
   const [error, setError] = useState<string | null>(null);
   if (estado.tipo !== "dentro") return null;
+  const secciones = seccionesDe(estado.usuario.role);
 
   async function cerrar() {
     setSaliendo(true);
@@ -80,6 +90,16 @@ function Cabecera() {
           {error}
         </p>
       )}
+      {/* Con una sola sección (profesional, cliente) la barra no aporta nada. */}
+      {secciones.length > 1 && (
+        <nav className="secciones" aria-label="Secciones">
+          {secciones.map((s) => (
+            <NavLink key={s} to={SECCIONES[s].ruta}>
+              {SECCIONES[s].nombre}
+            </NavLink>
+          ))}
+        </nav>
+      )}
     </header>
   );
 }
@@ -89,8 +109,8 @@ type EstadoLista =
   | { tipo: "error"; mensaje: string }
   | { tipo: "ok"; usuarios: UsuarioAdmin[] };
 
-/** Área de administración: la lista real de usuarios (GET /api/users, solo admin), los servicios (T15) y los contactos (T12). */
-export function AreaAdmin() {
+/** Usuarios (solo admin): la lista real de GET /api/users. Su propia sección desde T18. */
+export function Usuarios() {
   const { caducada } = useSesion();
   const [lista, setLista] = useState<EstadoLista>({ tipo: "cargando" });
   const [intento, setIntento] = useState(0);
@@ -111,44 +131,40 @@ export function AreaAdmin() {
   }, [caducada, intento]);
 
   return (
-    <>
-      <section className="tarjeta" aria-labelledby="titulo-usuarios">
-        <h2 id="titulo-usuarios">Usuarios</h2>
-        {lista.tipo === "cargando" && <p>Cargando usuarios…</p>}
-        {lista.tipo === "error" && (
-          <>
-            <p className="error" role="alert">
-              {lista.mensaje}
-            </p>
-            <button type="button" className="secundario" onClick={() => setIntento((n) => n + 1)}>
-              Reintentar
-            </button>
-          </>
-        )}
-        {lista.tipo === "ok" && (
-          <table className="tabla">
-            <thead>
-              <tr>
-                <th scope="col">Email</th>
-                <th scope="col">Rol</th>
-                <th scope="col">Estado</th>
+    <section className="tarjeta" aria-labelledby="titulo-usuarios">
+      <h2 id="titulo-usuarios">Usuarios</h2>
+      {lista.tipo === "cargando" && <p>Cargando usuarios…</p>}
+      {lista.tipo === "error" && (
+        <>
+          <p className="error" role="alert">
+            {lista.mensaje}
+          </p>
+          <button type="button" className="secundario" onClick={() => setIntento((n) => n + 1)}>
+            Reintentar
+          </button>
+        </>
+      )}
+      {lista.tipo === "ok" && (
+        <table className="tabla">
+          <thead>
+            <tr>
+              <th scope="col">Email</th>
+              <th scope="col">Rol</th>
+              <th scope="col">Estado</th>
+            </tr>
+          </thead>
+          <tbody>
+            {lista.usuarios.map((u) => (
+              <tr key={u.id}>
+                <td>{u.email}</td>
+                <td>{NOMBRE_ROL[u.role]}</td>
+                <td>{u.active ? "Activa" : "Desactivada"}</td>
               </tr>
-            </thead>
-            <tbody>
-              {lista.usuarios.map((u) => (
-                <tr key={u.id}>
-                  <td>{u.email}</td>
-                  <td>{NOMBRE_ROL[u.role]}</td>
-                  <td>{u.active ? "Activa" : "Desactivada"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
-      <Servicios />
-      <Contactos />
-    </>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
   );
 }
 

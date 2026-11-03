@@ -1,5 +1,5 @@
 // Contactos (T12): alta, lista de los 20 más recientes y búsqueda mientras se escribe; filtros
-// de estado y responsable (T14). Lo usan recepción (/recepcion) y administración (/admin). Quién
+// de estado y responsable (T14). Lo usan recepción y administración (/contactos desde T18). Quién
 // puede ver y crear lo decide la API (403 para profesional y cliente); aquí solo se muestra.
 
 import { useEffect, useState, type FormEvent } from "react";
@@ -17,7 +17,7 @@ import {
   type OrigenContacto,
   type Responsable,
 } from "./api";
-import { AREA_DE, useSesion } from "./sesion";
+import { useSesion } from "./sesion";
 
 /** Espera tras la última tecla antes de buscar: no se lanza una petición por letra. */
 export const PAUSA_BUSQUEDA_MS = 300;
@@ -219,9 +219,6 @@ function ListaDeContactos({
   busqueda: string;
   filtrosPorDefecto: boolean;
 }) {
-  const { estado } = useSesion();
-  // Cada nombre abre su ficha (T13) dentro del área de quien la mira: /recepcion o /admin.
-  const area = estado.tipo === "dentro" ? AREA_DE[estado.usuario.role] : "";
   if (lista.items.length === 0) {
     // Por defecto no se ven los perdidos: no se dice «todavía no hay contactos» porque puede haberlos.
     let mensaje = "No hay contactos activos. Crea uno con «Nuevo contacto».";
@@ -239,7 +236,8 @@ function ListaDeContactos({
       <ul className="contactos">
         {lista.items.map((c) => (
           <li key={c.id} className="contacto">
-            <Link className="contacto__nombre" to={`${area}/contactos/${c.id}`}>
+            {/* Cada nombre abre su ficha (T13), la misma dirección para todos desde T18. */}
+            <Link className="contacto__nombre" to={`/contactos/${c.id}`}>
               {c.first_name} {c.last_name}
             </Link>
             <span className="contacto__datos">

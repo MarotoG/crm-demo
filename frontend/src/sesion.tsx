@@ -19,13 +19,6 @@ type Sesion = {
   caducada: () => void;
 };
 
-export const AREA_DE: Record<Rol, string> = {
-  admin: "/admin",
-  reception: "/recepcion",
-  professional: "/profesional",
-  client: "/portal",
-};
-
 export const NOMBRE_ROL: Record<Rol, string> = {
   admin: "Administración",
   reception: "Recepción",

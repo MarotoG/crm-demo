@@ -1,4 +1,4 @@
-// Llamadas a la API: salud del sistema (T06), sesión y usuarios (T10), contactos (T12–T14) y servicios (T15). Las rutas son
+// Llamadas a la API: salud del sistema (T06), sesión y usuarios (T10), contactos (T12–T14), servicios (T15) y citas (T16–T18). Las rutas son
 // relativas (/api/...): en desarrollo las reenvía el proxy de Vite y en producción nginx.
 
 export type EstadoSalud =
@@ -294,4 +294,41 @@ export function actualizarServicio(
   csrf: string,
 ): Promise<Servicio> {
   return peticion<Servicio>(`/api/services/${id}`, { method: "PUT", cuerpo: datos, csrf });
+}
+
+// --- Citas (T16–T18) -----------------------------------------------------------
+
+export type EstadoCita = "scheduled" | "completed" | "no_show" | "cancelled";
+
+/** Una cita de la agenda. Las horas vienen en la de la clínica, con su desfase («…T09:30:00-05:00»). */
+export type CitaAgenda = {
+  id: number;
+  contact_id: number;
+  service_id: number;
+  staff_id: number;
+  starts_at: string;
+  ends_at: string;
+  duration_minutes: number;
+  status: EstadoCita;
+  version: number;
+  created_at: string;
+  contact_name: string;
+  service_name: string;
+  staff_email: string;
+};
+
+/** Sin la duración: la API la copia del servicio. `starts_at`: hora local de la clínica, «2027-01-11T09:30». */
+export type NuevaCita = { contact_id: number; service_id: number; staff_id: number; starts_at: string };
+
+/** Las citas que ocupan parte de un día (AAAA-MM-DD, en la hora de la clínica), por hora. */
+export function listarCitas(dia: string, filtros: { persona?: number; contacto?: number } = {}): Promise<CitaAgenda[]> {
+  const parametros = new URLSearchParams({ date: dia });
+  if (filtros.persona !== undefined) parametros.append("staff_id", String(filtros.persona));
+  if (filtros.contacto !== undefined) parametros.append("contact_id", String(filtros.contacto));
+  return peticion<CitaAgenda[]>(`/api/appointments?${parametros}`);
+}
+
+/** 409 si quien la realiza ya tiene otra cita que se pisa (T17); el mensaje dice cuál. */
+export function crearCita(datos: NuevaCita, csrf: string): Promise<Omit<CitaAgenda, "contact_name" | "service_name" | "staff_email">> {
+  return peticion("/api/appointments", { method: "POST", cuerpo: datos, csrf });
 }

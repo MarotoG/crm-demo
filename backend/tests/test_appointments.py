@@ -603,3 +603,79 @@ def test_el_aviso_nombra_la_cita_que_de_verdad_choca(db, usuarios, escena):
 
     assert response.status_code == 409
     assert response.json() == {"detail": CHOQUE}
+
+
+# --- Agenda de un día (T18) ---------------------------------------------------------------
+
+
+def agenda(role: Role = Role.RECEPTION, **parametros):
+    client, _ = sesion_de(role)
+    return client.get("/api/appointments", params=parametros)
+
+
+def test_la_agenda_del_dia_por_hora_con_los_nombres(db, usuarios, escena):
+    contact, service, persona = escena
+    tarde = crear(datos(escena, starts_at="2027-01-11T16:00")).json()
+    manana = crear(para_otro(db, escena, starts_at="2027-01-11T09:30")).json()
+    crear(para_otro(db, escena, starts_at="2027-01-12T09:30"))  # otro día: no sale
+
+    response = agenda(date="2027-01-11")
+
+    assert response.status_code == 200
+    citas = response.json()
+    assert [c["id"] for c in citas] == [manana["id"], tarde["id"]]
+    assert citas[1] == tarde | {
+        "contact_name": "Ana Lopez",
+        "service_name": "Botox",
+        "staff_email": "professional@prueba.example.com",
+    }
+    assert citas[0]["starts_at"] == "2027-01-11T09:30:00-05:00"
+
+
+@pytest.mark.parametrize("role", [Role.ADMIN, Role.RECEPTION])
+def test_admin_y_recepcion_ven_la_agenda(db, escena, role):
+    crear(datos(escena))
+
+    assert len(agenda(role, date="2027-01-11").json()) == 1
+
+
+@pytest.mark.parametrize("role", [Role.PROFESSIONAL, Role.CLIENT])
+def test_profesional_y_cliente_no_ven_la_agenda_todavia(db, escena, role):
+    assert agenda(role, date="2027-01-11").status_code == 403
+
+
+def test_filtro_por_persona_y_por_contacto(db, usuarios, escena):
+    crear(datos(escena))
+    de_admin = crear(para_otro(db, escena, persona=usuarios[Role.ADMIN], starts_at="2027-01-11T12:00")).json()
+
+    assert [c["id"] for c in agenda(date="2027-01-11", staff_id=usuarios[Role.ADMIN].id).json()] == [de_admin["id"]]
+    assert [c["contact_id"] for c in agenda(date="2027-01-11", contact_id=escena[0].id).json()] == [escena[0].id]
+    assert agenda(date="2027-01-11", staff_id=999_999).json() == []
+
+
+def test_la_cita_que_cruza_la_medianoche_sale_en_los_dos_dias(db, escena):
+    cita = crear(datos(escena, starts_at="2027-01-11T23:30")).json()
+
+    for dia in ("2027-01-11", "2027-01-12"):
+        assert [c["id"] for c in agenda(date=dia).json()] == [cita["id"]], dia
+    # La que acaba justo a medianoche no ocupa el día siguiente: [inicio, fin).
+    assert crear(para_otro(db, escena, starts_at="2027-01-12T23:00")).status_code == 201
+    assert len(agenda(date="2027-01-13").json()) == 0
+
+
+def test_el_dia_del_cambio_de_horario_tiene_23_horas(db, escena):
+    # 14/03/2027: de 0:00 a 0:00 del día siguiente son 23 horas reales; las dos citas son de ese día.
+    primera = crear(datos(escena, starts_at="2027-03-14T00:00")).json()
+    ultima = crear(para_otro(db, escena, starts_at="2027-03-14T22:55", minutos=5)).json()
+    crear(para_otro(db, escena, starts_at="2027-03-15T00:00"))
+
+    assert [c["id"] for c in agenda(date="2027-03-14").json()] == [primera["id"], ultima["id"]]
+
+
+@pytest.mark.parametrize("dia", ["2027-02-30", "11/01/2027", "mañana", ""])
+def test_dia_no_valido_422(db, escena, dia):
+    assert agenda(date=dia).status_code == 422
+
+
+def test_sin_dia_422(db, escena):
+    assert agenda().status_code == 422

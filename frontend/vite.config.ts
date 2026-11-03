@@ -19,5 +19,6 @@ export default defineConfig({
     // Las pruebas (Vitest + Testing Library) usan un DOM simulado y una API falsa:
     // no necesitan el backend ni el navegador.
     environment: "jsdom",
+    setupFiles: ["./src/configuracionPruebas.ts"],
   },
 });

@@ -1,4 +1,5 @@
 """Citas (T16): crear una cita para un contacto, un servicio y una de las personas que lo realizan.
+La agenda de un día (T18), con filtros por persona y contacto.
 
 Las crean administración y recepción; el profesional y el cliente reciben 403 (consultarán las
 suyas más adelante). La hora se escribe en la hora local de la clínica, sin zona (decisión T16), y
@@ -10,10 +11,11 @@ vez con dos personas distintas (tinte y pedicura, decisión T17).
 """
 
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
+from typing import Annotated
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, StrictInt, field_validator
 from pydantic_core import PydanticCustomError
 from sqlalchemy import select
@@ -90,6 +92,22 @@ class AppointmentOut(BaseModel):
     created_at: datetime
 
 
+class AgendaItem(AppointmentOut):
+    """Una cita de la agenda (T18): además, los nombres que se leen en la lista."""
+
+    contact_name: str
+    service_name: str
+    staff_email: str
+
+
+def _day_bounds(day: date, zone: ZoneInfo) -> tuple[datetime, datetime]:
+    """Un día de la clínica como instantes [00:00, 00:00 del día siguiente). Con cambio de horario
+    dura 23 o 25 horas: por eso se calcula cada medianoche en la zona y no se suman 24 h."""
+    start = datetime.combine(day, time(0), tzinfo=zone)
+    end = datetime.combine(day + timedelta(days=1), time(0), tzinfo=zone)
+    return start.astimezone(UTC), end.astimezone(UTC)
+
+
 def _clock(moment: datetime) -> str:
     return f"{moment.hour}:{moment.minute:02d}"
 
@@ -128,6 +146,44 @@ def _overlap_or_raise(
 def get_now() -> datetime:
     """La hora actual; las pruebas la sustituyen para no depender del día en que se ejecutan."""
     return datetime.now(UTC)
+
+
+@router.get("")
+def list_appointments(
+    day: Annotated[date, Query(alias="date", description="Día en la hora de la clínica: AAAA-MM-DD")],
+    staff_id: int | None = None,
+    contact_id: int | None = None,
+    _user: User = Depends(require_roles(Role.ADMIN, Role.RECEPTION)),
+    db: Session = Depends(get_db),
+) -> list[AgendaItem]:
+    """Agenda de un día (T18), por hora de inicio; filtros opcionales por persona y por contacto.
+
+    Incluye las citas que ocupan parte del día aunque empiecen el anterior (23:30-0:30). El
+    profesional verá la suya en T20; hasta entonces, 403 como el cliente.
+    """
+    zone = get_settings().clinic_zone
+    start, end = _day_bounds(day, zone)
+    query = (
+        select(Appointment, Contact.first_name, Contact.last_name, Service.name, User.email)
+        .join(Contact, Contact.id == Appointment.contact_id)
+        .join(Service, Service.id == Appointment.service_id)
+        .join(User, User.id == Appointment.staff_id)
+        .where(Appointment.starts_at < end, Appointment.ends_at > start)
+        .order_by(Appointment.starts_at, Appointment.id)
+    )
+    if staff_id is not None:
+        query = query.where(Appointment.staff_id == staff_id)
+    if contact_id is not None:
+        query = query.where(Appointment.contact_id == contact_id)
+    return [
+        AgendaItem(
+            **_out(appointment, zone).model_dump(),
+            contact_name=f"{first_name} {last_name}",
+            service_name=service_name,
+            staff_email=staff_email,
+        )
+        for appointment, first_name, last_name, service_name, staff_email in db.execute(query)
+    ]
 
 
 @router.post(
@@ -222,6 +278,11 @@ def create_appointment(
     db.commit()
     db.refresh(appointment)
     logger.info("Cita creada: id=%s contacto=%s por user_id=%s", appointment.id, contact.id, user.id)
+    return _out(appointment, zone)
+
+
+def _out(appointment: Appointment, zone: ZoneInfo) -> AppointmentOut:
+    """La cita con sus horas en la de la clínica."""
     return AppointmentOut(
         id=appointment.id,
         contact_id=appointment.contact_id,
