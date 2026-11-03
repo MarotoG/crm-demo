@@ -67,6 +67,7 @@ beforeEach(() => {
       const clave = `${metodo} ${url.pathname}`;
       if (clave === "GET /api/auth/me") r = { status: 200, cuerpo: usuario };
       if (clave === "GET /api/users") r = { status: 200, cuerpo: [] };
+      if (clave === "GET /api/services") r = { status: 200, cuerpo: [] }; // T15: la sección de servicios
       if (clave === "GET /api/contacts") r = await contactos(url.searchParams.get("q"));
       if (clave === "POST /api/contacts") r = alta(cuerpo);
       return new Response(r.cuerpo === undefined ? null : JSON.stringify(r.cuerpo), {

@@ -20,21 +20,6 @@ class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 
-class Service(Base):
-    """Servicio que ofrece la clínica (p. ej. «Limpieza facial», 60 min).
-
-    Primera tabla del CRM (T05): sin relaciones; las citas la referenciarán.
-    """
-
-    __tablename__ = "services"
-    __table_args__ = (CheckConstraint("duration_minutes > 0", name="duration_minutes_positive"),)
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(120))
-    duration_minutes: Mapped[int]
-    active: Mapped[bool] = mapped_column(default=True, server_default=true())
-
-
 class Role(StrEnum):
     """Los cuatro roles del CRM (especificaciones, sección 5)."""
 
@@ -191,3 +176,46 @@ class Contact(Base):
     # Responsable (T14): quien lleva el contacto en la clínica (recepción o admin); por
     # defecto quien lo crea. Puede quedar sin responsable; si se borrara su cuenta, también.
     owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
+
+
+class Service(Base):
+    """Servicio que ofrece la clínica (p. ej. «Facial cleansing», 60 min).
+
+    Primera tabla del CRM (T05). Desde T15 la gestionan administración y recepción: nombre,
+    duración, quién lo realiza y si está activo. No se borra nunca: desactivado deja de
+    ofrecerse para citas nuevas sin perder el historial. Las citas guardarán su propia duración.
+    """
+
+    __tablename__ = "services"
+    __table_args__ = (
+        # Duración (decisión T15): múltiplos de 5 minutos, hasta 4 horas.
+        CheckConstraint(
+            "duration_minutes BETWEEN 5 AND 240 AND duration_minutes % 5 = 0", name="duration_minutes_valid"
+        ),
+        CheckConstraint(_name_normalized("name"), name="name_normalized"),
+        # La misma lista cerrada que app/validators.py (sin tildes, como los contactos).
+        CheckConstraint("name ~ '^[A-Za-z0-9][A-Za-z0-9 .,''&+/()-]*$'", name="name_ascii"),
+        CheckConstraint("version >= 1", name="version_positive"),
+        # Dos servicios no se llaman igual, sin distinguir mayúsculas (tampoco con uno desactivado).
+        Index("uq_services_name", func.lower(text("name")), unique=True),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    duration_minutes: Mapped[int]
+    active: Mapped[bool] = mapped_column(default=True, server_default=true())
+    # Bloqueo optimista, como en los contactos (T13): admin y recepción pueden editar a la vez.
+    version: Mapped[int] = mapped_column(default=1, server_default="1")
+
+
+class ServiceStaff(Base):
+    """Quién realiza cada servicio (T15): una o varias cuentas internas por servicio.
+
+    Al crear una cita (T16) solo se podrá elegir a una de estas personas. Que sean cuentas
+    internas activas lo comprueba la API; si se borrara una cuenta, deja de figurar.
+    """
+
+    __tablename__ = "service_staff"
+
+    service_id: Mapped[int] = mapped_column(ForeignKey("services.id", ondelete="CASCADE"), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True, index=True)

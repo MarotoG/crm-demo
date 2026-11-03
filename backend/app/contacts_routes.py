@@ -7,7 +7,6 @@ hasta entonces recibe 403, igual que el cliente.
 
 import logging
 import re
-from collections.abc import Callable
 from datetime import datetime
 from typing import Annotated, Literal
 
@@ -20,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.auth import require_csrf, require_roles
 from app.db import get_db
+from app.errors import field_error, user_message
 from app.models import Contact, ContactSource, ContactStatus, Role, User
 from app.validators import normalize_contact_email, normalize_name, normalize_phone
 
@@ -63,18 +63,6 @@ MAX_SEARCH_LENGTH = 100
 MIN_PHONE_DIGITS = 3
 
 
-def _user_message(normalize: Callable[[str], str]) -> Callable[[str], str]:
-    """Convierte el ValueError de un validador en un error de Pydantic con el mensaje tal cual."""
-
-    def validator(value: str) -> str:
-        try:
-            return normalize(value)
-        except ValueError as error:
-            raise PydanticCustomError("dato_no_valido", str(error)) from None
-
-    return validator
-
-
 class ContactCreate(BaseModel):
     # extra="forbid": el navegador no puede fijar el estado, el autor ni las fechas.
     model_config = ConfigDict(extra="forbid")
@@ -88,12 +76,12 @@ class ContactCreate(BaseModel):
     @field_validator("first_name")
     @classmethod
     def _first_name(cls, value: str) -> str:
-        return _user_message(lambda v: normalize_name(v, "nombre"))(value)
+        return user_message(lambda v: normalize_name(v, "nombre"))(value)
 
     @field_validator("last_name")
     @classmethod
     def _last_name(cls, value: str) -> str:
-        return _user_message(lambda v: normalize_name(v, "apellido"))(value)
+        return user_message(lambda v: normalize_name(v, "apellido"))(value)
 
     @field_validator("email", "phone", mode="before")
     @classmethod
@@ -104,12 +92,12 @@ class ContactCreate(BaseModel):
     @field_validator("email")
     @classmethod
     def _email(cls, value: str | None) -> str | None:
-        return None if value is None else _user_message(normalize_contact_email)(value)
+        return None if value is None else user_message(normalize_contact_email)(value)
 
     @field_validator("phone")
     @classmethod
     def _phone(cls, value: str | None) -> str | None:
-        return None if value is None else _user_message(normalize_phone)(value)
+        return None if value is None else user_message(normalize_phone)(value)
 
     @model_validator(mode="after")
     def _email_or_phone(self) -> "ContactCreate":
@@ -157,14 +145,6 @@ class OwnerOut(BaseModel):
 def _out(contact: Contact, owner_email: str | None) -> ContactOut:
     fields = {name: getattr(contact, name) for name in ContactOut.model_fields if name != "owner_email"}
     return ContactOut(**fields, owner_email=owner_email)
-
-
-def _field_error(field: str, message: str) -> HTTPException:
-    """422 con la misma forma que los de Pydantic, para que la interfaz lo muestre junto al campo."""
-    return HTTPException(
-        status.HTTP_422_UNPROCESSABLE_CONTENT,
-        [{"type": "dato_no_valido", "loc": ["body", field], "msg": message}],
-    )
 
 
 def _valid_owner(db: Session, user_id: int) -> bool:
@@ -333,7 +313,7 @@ def update_contact(
     # Solo se comprueba un responsable nuevo: guardar la ficha sin tocarlo no falla aunque esa
     # cuenta se haya desactivado después.
     if body.owner_id is not None and body.owner_id != current.owner_id and not _valid_owner(db, body.owner_id):
-        raise _field_error("owner_id", OWNER_NOT_VALID_MESSAGE)
+        raise field_error("owner_id", OWNER_NOT_VALID_MESSAGE)
     # Bloqueo optimista en una sola sentencia: solo se actualiza si la versión sigue siendo la
     # que leyó quien edita. Con dos ediciones a la vez, PostgreSQL bloquea la fila: la segunda
     # espera, vuelve a mirar la versión (ya subida) y no actualiza nada.
@@ -387,8 +367,8 @@ def change_status(
     target = body.status
     if target not in MANUAL_TRANSITIONS:
         if target == ContactStatus.NEW:
-            raise _field_error("status", "Un contacto no vuelve a «Nuevo»")
-        raise _field_error("status", f"«{STATUS_NAMES[target]}» no se pone a mano: lo pondrán las citas")
+            raise field_error("status", "Un contacto no vuelve a «Nuevo»")
+        raise field_error("status", f"«{STATUS_NAMES[target]}» no se pone a mano: lo pondrán las citas")
     # Como en la edición, una sola sentencia: versión y estado de origen se comprueban en el
     # mismo UPDATE, sin ventana entre leer y guardar.
     statement = (
@@ -409,7 +389,7 @@ def change_status(
         if contact.version != body.version:
             raise HTTPException(status.HTTP_409_CONFLICT, VERSION_CONFLICT_MESSAGE)
         origin = STATUS_NAMES[ContactStatus(contact.status)]
-        raise _field_error("status", f"No se puede pasar de «{origin}» a «{STATUS_NAMES[target]}»")
+        raise field_error("status", f"No se puede pasar de «{origin}» a «{STATUS_NAMES[target]}»")
     db.commit()
     contact = db.get(Contact, contact_id, populate_existing=True)
     logger.info("Estado del contacto: id=%s a %s por user_id=%s, versión %s", contact.id, target.value, user.id, contact.version)

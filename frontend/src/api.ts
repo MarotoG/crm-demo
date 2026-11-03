@@ -1,4 +1,4 @@
-// Llamadas a la API: salud del sistema (T06), sesión y usuarios (T10) y contactos (T12–T14). Las rutas son
+// Llamadas a la API: salud del sistema (T06), sesión y usuarios (T10), contactos (T12–T14) y servicios (T15). Las rutas son
 // relativas (/api/...): en desarrollo las reenvía el proxy de Vite y en producción nginx.
 
 export type EstadoSalud =
@@ -254,4 +254,44 @@ export type Responsable = { id: number; email: string };
 /** Quién puede ser responsable: las cuentas activas de recepción y administración. */
 export function listarResponsables(): Promise<Responsable[]> {
   return peticion<Responsable[]>("/api/contacts/owners");
+}
+
+// --- Servicios (T15) -----------------------------------------------------------
+
+/** Una persona que realiza servicios: cualquier cuenta interna. `active` false: desactivada después. */
+export type PersonaServicio = { id: number; email: string; role: Rol; active: boolean };
+
+export type Servicio = {
+  id: number;
+  name: string;
+  duration_minutes: number;
+  active: boolean;
+  /** Bloqueo optimista, como en los contactos: hay que devolverla al editar. */
+  version: number;
+  staff: PersonaServicio[];
+};
+
+export type DatosServicio = { name: string; duration_minutes: number; staff_ids: number[] };
+
+/** Admin y recepción: todos (primero los activos). Profesional: solo sus servicios activos. */
+export function listarServicios(): Promise<Servicio[]> {
+  return peticion<Servicio[]>("/api/services");
+}
+
+/** Quién se puede asignar a un servicio: las cuentas internas activas. */
+export function listarPersonasAsignables(): Promise<PersonaServicio[]> {
+  return peticion<PersonaServicio[]>("/api/services/staff");
+}
+
+export function crearServicio(datos: DatosServicio, csrf: string): Promise<Servicio> {
+  return peticion<Servicio>("/api/services", { method: "POST", cuerpo: datos, csrf });
+}
+
+/** PUT con el servicio entero, si está activo y la versión leída: 409 si otra persona guardó antes. */
+export function actualizarServicio(
+  id: number,
+  datos: DatosServicio & { active: boolean; version: number },
+  csrf: string,
+): Promise<Servicio> {
+  return peticion<Servicio>(`/api/services/${id}`, { method: "PUT", cuerpo: datos, csrf });
 }

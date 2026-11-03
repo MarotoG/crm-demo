@@ -14,6 +14,7 @@ from sqlalchemy.exc import OperationalError
 from app.auth_routes import router as auth_router
 from app.contacts_routes import router as contacts_router
 from app.db import get_database_check
+from app.services_routes import router as services_router
 from app.users_routes import router as users_router
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,7 @@ app = FastAPI(title="crm-demo API", version="0.1.0")
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(contacts_router)
+app.include_router(services_router)
 
 
 @app.exception_handler(OperationalError)

@@ -7,6 +7,7 @@ import { Link, Navigate, Outlet } from "react-router";
 
 import { ErrorApi, listarUsuarios, type Rol, type UsuarioAdmin } from "./api";
 import Contactos from "./Contactos";
+import Servicios from "./Servicios";
 import { AREA_DE, NOMBRE_ROL, useSesion } from "./sesion";
 
 /** Exige sesión: sin ella, al login. Con ella, la cabecera común y el área pedida. */
@@ -88,7 +89,7 @@ type EstadoLista =
   | { tipo: "error"; mensaje: string }
   | { tipo: "ok"; usuarios: UsuarioAdmin[] };
 
-/** Área de administración: la lista real de usuarios (GET /api/users, solo admin) y los contactos (T12). */
+/** Área de administración: la lista real de usuarios (GET /api/users, solo admin), los servicios (T15) y los contactos (T12). */
 export function AreaAdmin() {
   const { caducada } = useSesion();
   const [lista, setLista] = useState<EstadoLista>({ tipo: "cargando" });
@@ -145,6 +146,7 @@ export function AreaAdmin() {
           </table>
         )}
       </section>
+      <Servicios />
       <Contactos />
     </>
   );

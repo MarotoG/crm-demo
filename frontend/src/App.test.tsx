@@ -25,6 +25,7 @@ beforeEach(() => {
     "GET /api/health/db": () => ({ status: 200, cuerpo: { status: "ok", database: "ok" } }),
     "GET /api/auth/me": () => ({ status: 401, cuerpo: { detail: "No autenticado" } }),
     "GET /api/contacts": () => ({ status: 200, cuerpo: { total: 0, items: [] } }), // T12: recepción y admin la piden
+    "GET /api/services": () => ({ status: 200, cuerpo: [] }), // T15: recepción, admin y profesional la piden
   };
   vi.stubGlobal(
     "fetch",

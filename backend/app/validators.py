@@ -94,3 +94,39 @@ def normalize_phone(value: str) -> str:
     elif not 8 <= len(digits) <= 15 or digits.startswith("0"):
         raise ValueError("El teléfono internacional no es válido (+ prefijo del país y de 8 a 15 cifras)")
     return "+" + digits
+
+
+# --- Servicios (T15) -------------------------------------------------------------
+
+MAX_SERVICE_NAME_LENGTH = 120
+# Nombre de servicio: empieza por letra o cifra; después letras sin tilde, cifras, espacio y
+# . , ' & + / ( ) - («Botox (forehead)», «Peel 2/3»). La BD repite la expresión.
+_SERVICE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 .,'&+/()-]*$")
+
+# Duración (decisión T15): múltiplos de 5 minutos, hasta 4 horas. La BD repite la regla.
+MIN_DURATION_MINUTES = 5
+MAX_DURATION_MINUTES = 240
+DURATION_STEP_MINUTES = 5
+
+
+def normalize_service_name(value: str) -> str:
+    """Nombre de servicio: sin espacios en los extremos ni repetidos; no vacío; sin tildes."""
+    name = " ".join(value.split())
+    if not name:
+        raise ValueError("El nombre del servicio no puede estar vacío")
+    if len(name) > MAX_SERVICE_NAME_LENGTH:
+        raise ValueError(f"El nombre no puede tener más de {MAX_SERVICE_NAME_LENGTH} caracteres")
+    if not name.isascii():
+        raise ValueError(NO_ACCENTS_MESSAGE)
+    if not _SERVICE_NAME.match(name):
+        raise ValueError("El nombre solo puede tener letras, cifras, espacios y . , ' & + / ( ) -, y empezar por letra o cifra")
+    return name
+
+
+def check_duration(minutes: int) -> int:
+    if not MIN_DURATION_MINUTES <= minutes <= MAX_DURATION_MINUTES or minutes % DURATION_STEP_MINUTES:
+        raise ValueError(
+            f"La duración debe ser un múltiplo de {DURATION_STEP_MINUTES} minutos, "
+            f"entre {MIN_DURATION_MINUTES} y {MAX_DURATION_MINUTES} (4 horas)"
+        )
+    return minutes
