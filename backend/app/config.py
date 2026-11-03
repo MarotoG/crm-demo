@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -31,6 +32,22 @@ class Settings(BaseSettings):
     # Firma los tokens CSRF (T09). Opcional aquí para que /api/health/db no dependa de
     # ella; las rutas de sesión fallan con un mensaje claro si falta.
     secret_key: SecretStr | None = None
+    # Zona IANA de la clínica (T03; la usan las citas desde T16). Las horas de las citas se
+    # escriben y se muestran en esta zona; en la BD se guardan como instantes (timestamptz).
+    clinic_timezone: str = "America/New_York"
+
+    @field_validator("clinic_timezone")
+    @classmethod
+    def _clinic_timezone_valida(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError):
+            raise ValueError("CRM_CLINIC_TIMEZONE debe ser una zona IANA, p. ej. America/New_York") from None
+        return value
+
+    @property
+    def clinic_zone(self) -> ZoneInfo:
+        return ZoneInfo(self.clinic_timezone)
 
     @field_validator("secret_key")
     @classmethod

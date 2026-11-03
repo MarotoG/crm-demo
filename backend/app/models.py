@@ -88,7 +88,7 @@ class ContactStatus(StrEnum):
     """Estado comercial (T03): Nuevo → Contactado → Cita agendada → Cliente; Perdido desde cualquiera.
 
     Todo contacto nace en «new». Las transiciones a mano están en app/contacts_routes.py (T14);
-    «scheduled» y «client» los pondrán las citas.
+    «scheduled» lo pone crear una cita (T16) y «client» lo pondrá marcar Realizada la primera.
     """
 
     NEW = "new"
@@ -219,3 +219,62 @@ class ServiceStaff(Base):
 
     service_id: Mapped[int] = mapped_column(ForeignKey("services.id", ondelete="CASCADE"), primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True, index=True)
+
+
+class AppointmentStatus(StrEnum):
+    """Estados de una cita (T03): Programada, Realizada, No presentado, Cancelada.
+
+    Toda cita nace «scheduled» (T16). Solo «cancelled» liberará la franja (T17); marcar
+    «completed» la primera cita pasará el contacto a Cliente (llegará con la asistencia).
+    """
+
+    SCHEDULED = "scheduled"
+    COMPLETED = "completed"
+    NO_SHOW = "no_show"
+    CANCELLED = "cancelled"
+
+
+class Appointment(Base):
+    """Cita de un contacto para un servicio con una de las personas que lo realizan (T16).
+
+    Guarda su propia duración, copiada del servicio al crearla: cambiar después el servicio no
+    reescribe las citas ya dadas. Inicio y fin son instantes (timestamptz); la zona de la
+    clínica solo se usa para leerlos y escribirlos. Sin notas libres por ahora (decisión T16).
+    """
+
+    __tablename__ = "appointments"
+    __table_args__ = (
+        CheckConstraint(_in_list("status", AppointmentStatus), name="status_valid"),
+        # La misma regla que los servicios (T15): la duración copiada siempre la cumple.
+        CheckConstraint(
+            "duration_minutes BETWEEN 5 AND 240 AND duration_minutes % 5 = 0", name="duration_minutes_valid"
+        ),
+        # El fin no es un dato aparte: es el inicio más la duración (y por tanto posterior).
+        CheckConstraint("ends_at = starts_at + duration_minutes * interval '1 minute'", name="ends_at_consistent"),
+        CheckConstraint("version >= 1", name="version_positive"),
+        # La agenda de cada persona por fecha (T18) y, en T17, la regla de solapamientos.
+        Index("ix_appointments_staff_id_starts_at", "staff_id", "starts_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # Sin ON DELETE: contactos, servicios y cuentas no se borran (se desactivan o pasan a
+    # Perdido); si alguien lo intentara con citas, la BD lo impide y el historial se conserva.
+    contact_id: Mapped[int] = mapped_column(ForeignKey("contacts.id"), index=True)
+    service_id: Mapped[int] = mapped_column(ForeignKey("services.id"))
+    # Quién la realiza: una de las personas del servicio al crearla. Puede ser admin, recepción o
+    # profesional (T15), por eso no se llama professional_id como en el modelo de T03.
+    staff_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    duration_minutes: Mapped[int]
+    status: Mapped[str] = mapped_column(
+        String(20), default=AppointmentStatus.SCHEDULED, server_default=AppointmentStatus.SCHEDULED.value
+    )
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    updated_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    # Bloqueo optimista desde el principio, para reprogramar y cancelar (T19) como en T13.
+    version: Mapped[int] = mapped_column(default=1, server_default="1")

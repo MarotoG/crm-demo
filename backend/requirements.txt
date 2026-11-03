@@ -10,6 +10,9 @@ sqlalchemy==2.1.4
 alembic==1.20.0
 psycopg[binary]==3.3.6
 pydantic-settings==2.15.0
+# Zonas horarias IANA para la hora de las citas (T16). Directa y en todos los sistemas: las
+# imágenes Linux mínimas pueden no traer /usr/share/zoneinfo. Misma versión que ya se usaba.
+tzdata==2026.5
 
 # Transitivas de fastapi
 annotated-doc==0.0.5
@@ -34,7 +37,6 @@ markupsafe==3.0.4
 
 # Transitivas de psycopg
 psycopg-binary==3.3.6
-tzdata==2026.5 ; sys_platform == "win32"
 
 # Transitivas de pydantic-settings
 python-dotenv==1.2.4

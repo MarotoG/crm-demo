@@ -11,6 +11,7 @@ from fastapi import Depends, FastAPI, Request, Response, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import OperationalError
 
+from app.appointments_routes import router as appointments_router
 from app.auth_routes import router as auth_router
 from app.contacts_routes import router as contacts_router
 from app.db import get_database_check
@@ -24,6 +25,7 @@ app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(contacts_router)
 app.include_router(services_router)
+app.include_router(appointments_router)
 
 
 @app.exception_handler(OperationalError)

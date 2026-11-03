@@ -1,8 +1,12 @@
-"""Validación propia de nombres, emails y teléfonos (T11; sin tildes desde T12b), sin BD."""
+"""Validación propia de nombres, emails y teléfonos (T11; sin tildes desde T12b) y de la hora de
+las citas (T16), sin BD."""
+
+from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.validators import normalize_contact_email, normalize_name, normalize_phone
+from app.validators import clinic_instant, normalize_contact_email, normalize_name, normalize_phone, parse_local_start
 
 # --- Nombres ------------------------------------------------------------------
 
@@ -150,3 +154,71 @@ def test_telefonos_no_validos(entrada):
 def test_email_con_tilde_da_el_aviso_de_tildes():
     with pytest.raises(ValueError, match=r"^No se permiten tildes"):
         normalize_contact_email("josé@clinica.com")
+
+
+# --- Hora de las citas (T16) --------------------------------------------------------
+
+NUEVA_YORK = ZoneInfo("America/New_York")
+FORMATO = "Indica la fecha y la hora de inicio como AAAA-MM-DDTHH:MM, en hora de la clínica"
+
+
+def test_hora_local_valida():
+    assert parse_local_start("2027-01-11T09:30") == datetime(2027, 1, 11, 9, 30)
+
+
+@pytest.mark.parametrize(
+    "entrada, mensaje",
+    [
+        ("2027-01-11T09:30:00", FORMATO),  # con segundos
+        ("2027-01-11 09:30", FORMATO),  # sin la T
+        ("2027-01-11T09:30-05:00", FORMATO),  # con desfase: la zona es siempre la de la clínica
+        ("2027-01-11T09:30Z", FORMATO),
+        ("2027-01-11", FORMATO),
+        ("11/01/2027 09:30", FORMATO),
+        ("", FORMATO),
+        ("２０２７-01-11T09:30", FORMATO),  # cifras de ancho completo
+        ("2027-01-11T09:30\n", FORMATO),
+        (" 2027-01-11T09:30", FORMATO),
+        ("2027-02-30T09:30", "Esa fecha u hora no existe"),
+        ("2027-01-11T24:00", "Esa fecha u hora no existe"),
+        ("2027-01-11T09:32", "La hora de inicio debe ir en múltiplos de 5 minutos (9:00, 9:05, 9:10…)"),
+    ],
+)
+def test_hora_local_no_valida(entrada, mensaje):
+    with pytest.raises(ValueError) as error:
+        parse_local_start(entrada)
+    assert str(error.value) == mensaje
+
+
+@pytest.mark.parametrize(
+    "local, utc",
+    [
+        (datetime(2027, 1, 11, 9, 30), datetime(2027, 1, 11, 14, 30, tzinfo=UTC)),  # invierno: −5 h
+        (datetime(2027, 7, 1, 9, 30), datetime(2027, 7, 1, 13, 30, tzinfo=UTC)),  # verano: −4 h
+        # Justo antes y justo después de las horas dudosas de 2027 (14/03 y 07/11).
+        (datetime(2027, 3, 14, 1, 55), datetime(2027, 3, 14, 6, 55, tzinfo=UTC)),
+        (datetime(2027, 3, 14, 3, 0), datetime(2027, 3, 14, 7, 0, tzinfo=UTC)),
+        (datetime(2027, 11, 7, 0, 55), datetime(2027, 11, 7, 4, 55, tzinfo=UTC)),
+        (datetime(2027, 11, 7, 2, 0), datetime(2027, 11, 7, 7, 0, tzinfo=UTC)),
+    ],
+)
+def test_hora_local_a_instante(local, utc):
+    assert clinic_instant(local, NUEVA_YORK) == utc
+
+
+@pytest.mark.parametrize("hora", [datetime(2027, 3, 14, 2, 0), datetime(2027, 3, 14, 2, 30), datetime(2027, 3, 14, 2, 55)])
+def test_hora_que_no_existe_por_el_cambio_de_horario(hora):
+    with pytest.raises(ValueError, match="^Esa hora no existe ese día"):
+        clinic_instant(hora, NUEVA_YORK)
+
+
+@pytest.mark.parametrize("hora", [datetime(2027, 11, 7, 1, 0), datetime(2027, 11, 7, 1, 30), datetime(2027, 11, 7, 1, 55)])
+def test_hora_que_se_repite_por_el_cambio_de_horario(hora):
+    with pytest.raises(ValueError, match="^Esa hora se repite ese día"):
+        clinic_instant(hora, NUEVA_YORK)
+
+
+def test_otra_zona_otro_instante():
+    assert clinic_instant(datetime(2027, 1, 11, 9, 30), ZoneInfo("America/Los_Angeles")) == datetime(
+        2027, 1, 11, 17, 30, tzinfo=UTC
+    )

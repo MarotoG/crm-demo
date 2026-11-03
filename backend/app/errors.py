@@ -1,4 +1,5 @@
-"""Errores de validación con el mensaje para el usuario, comunes a contactos (T11) y servicios (T15)."""
+"""Errores de validación con el mensaje para el usuario, comunes a contactos (T11), servicios (T15)
+y citas (T16)."""
 
 from collections.abc import Callable
 
@@ -6,10 +7,10 @@ from fastapi import HTTPException, status
 from pydantic_core import PydanticCustomError
 
 
-def user_message(normalize: Callable[[str], str]) -> Callable[[str], str]:
+def user_message[T](normalize: Callable[[str], T]) -> Callable[[str], T]:
     """Convierte el ValueError de un validador en un error de Pydantic con el mensaje tal cual."""
 
-    def validator(value: str) -> str:
+    def validator(value: str) -> T:
         try:
             return normalize(value)
         except ValueError as error:

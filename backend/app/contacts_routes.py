@@ -49,8 +49,9 @@ STATUS_NAMES = {
 
 # Cambios de estado a mano (decisión T14): estado al que se va → estados desde los que se puede.
 # Se avanza un paso y Perdido vale desde cualquiera; un Perdido se reabre como Contactado.
-# «Cita agendada» y «Cliente» no se ponen a mano: los pondrán las citas (así no puede haber
-# un Cliente sin ninguna cita). Nunca se vuelve a Nuevo.
+# «Cita agendada» y «Cliente» no se ponen a mano: los ponen las citas (así no puede haber
+# un Cliente sin ninguna cita). «Cita agendada», al crear una (T16, app/appointments_routes.py).
+# Nunca se vuelve a Nuevo.
 MANUAL_TRANSITIONS: dict[ContactStatus, frozenset[ContactStatus]] = {
     ContactStatus.CONTACTED: frozenset({ContactStatus.NEW, ContactStatus.LOST}),
     ContactStatus.LOST: frozenset(set(ContactStatus) - {ContactStatus.LOST}),

@@ -1,4 +1,5 @@
-"""Normalización y validación de datos de contacto (T11), con código propio y sin dependencias.
+"""Normalización y validación de datos de contacto (T11), servicios (T15) y la hora de las citas
+(T16), con código propio y sin dependencias.
 
 Cada función devuelve el valor ya normalizado (el que se guarda) o lanza ValueError con
 un mensaje para el usuario. La BD repite las reglas básicas con restricciones CHECK.
@@ -10,6 +11,8 @@ sin reglas aparte, los invisibles, los de control y las letras que imitan a otra
 """
 
 import re
+from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 MAX_EMAIL_LENGTH = 254
 MAX_LOCAL_PART_LENGTH = 64
@@ -130,3 +133,42 @@ def check_duration(minutes: int) -> int:
             f"entre {MIN_DURATION_MINUTES} y {MAX_DURATION_MINUTES} (4 horas)"
         )
     return minutes
+
+
+# --- Citas (T16) -----------------------------------------------------------------
+
+# Hora de inicio (decisión T16): la hora local de la clínica, sin zona, en minutos exactos.
+# [0-9] y no \d: en Python, \d acepta también cifras de otras escrituras («２０２７»).
+_LOCAL_START = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}")
+START_STEP_MINUTES = 5
+START_FORMAT_MESSAGE = "Indica la fecha y la hora de inicio como AAAA-MM-DDTHH:MM, en hora de la clínica"
+
+
+def parse_local_start(value: str) -> datetime:
+    """«2027-01-11T09:30» → datetime sin zona. Sin segundos ni zona: la zona es siempre la de la clínica."""
+    # fullmatch y no match: con «$», un salto de línea final también pasaría.
+    if not _LOCAL_START.fullmatch(value):
+        raise ValueError(START_FORMAT_MESSAGE)
+    try:
+        local = datetime.strptime(value, "%Y-%m-%dT%H:%M")
+    except ValueError:
+        raise ValueError("Esa fecha u hora no existe") from None
+    if local.minute % START_STEP_MINUTES:
+        raise ValueError(f"La hora de inicio debe ir en múltiplos de {START_STEP_MINUTES} minutos (9:00, 9:05, 9:10…)")
+    return local
+
+
+def clinic_instant(local: datetime, zone: ZoneInfo) -> datetime:
+    """La hora local de la clínica como instante en UTC, rechazando las horas dudosas del cambio de horario.
+
+    En primavera el reloj salta de 1:59 a 3:00: las 2:30 no existen ese día. En otoño vuelve de
+    1:59 a 1:00: la 1:30 ocurre dos veces. Las dos se rechazan en vez de adivinar cuál quería.
+    """
+    first = local.replace(tzinfo=zone, fold=0)
+    second = local.replace(tzinfo=zone, fold=1)
+    if first.utcoffset() != second.utcoffset():
+        # Ida y vuelta: una hora que no existe cambia al pasar a UTC y volver; una repetida, no.
+        if first.astimezone(UTC).astimezone(zone).replace(tzinfo=None) != local:
+            raise ValueError("Esa hora no existe ese día: el reloj se adelanta una hora por el cambio de horario")
+        raise ValueError("Esa hora se repite ese día por el cambio de horario: elige otra")
+    return first.astimezone(UTC)
