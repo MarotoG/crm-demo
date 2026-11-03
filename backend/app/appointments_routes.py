@@ -2,24 +2,39 @@
 
 Las crean administración y recepción; el profesional y el cliente reciben 403 (consultarán las
 suyas más adelante). La hora se escribe en la hora local de la clínica, sin zona (decisión T16), y
-la API la convierte a un instante. La duración se copia del servicio. Todavía no se rechazan los
-solapamientos: llegan en T17, con una restricción de PostgreSQL.
+la API la convierte a un instante. La duración se copia del servicio.
+
+Solapamientos (T17): la misma persona no puede tener dos citas que se pisen (409). Lo decide una
+restricción de exclusión de PostgreSQL (app/models.py). Una clienta sí puede tener dos citas a la
+vez con dos personas distintas (tinte y pedicura, decisión T17).
 """
 
 import logging
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, StrictInt, field_validator
 from pydantic_core import PydanticCustomError
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth import require_csrf, require_roles
 from app.config import get_settings
 from app.db import get_db
 from app.errors import field_error, user_message
-from app.models import Appointment, Contact, ContactStatus, Role, Service, ServiceStaff, User
+from app.models import (
+    STAFF_OVERLAP_CONSTRAINT,
+    Appointment,
+    AppointmentStatus,
+    Contact,
+    ContactStatus,
+    Role,
+    Service,
+    ServiceStaff,
+    User,
+)
 from app.services_routes import STAFF_ROLES
 from app.validators import START_FORMAT_MESSAGE, clinic_instant, parse_local_start
 
@@ -40,6 +55,7 @@ CONTACT_NOT_FOUND_MESSAGE = "El contacto no existe"
 CONTACT_LOST_MESSAGE = "El contacto está «Perdido»: reábrelo antes de darle una cita"
 SERVICE_NOT_VALID_MESSAGE = "El servicio no existe o está desactivado"
 STAFF_NOT_VALID_MESSAGE = "Esa persona no realiza este servicio o su cuenta no está activa"
+OVERLAP_FALLBACK_MESSAGE = "Esa persona ya tiene otra cita a esa hora"
 
 
 class AppointmentCreate(BaseModel):
@@ -74,6 +90,41 @@ class AppointmentOut(BaseModel):
     created_at: datetime
 
 
+def _clock(moment: datetime) -> str:
+    return f"{moment.hour}:{moment.minute:02d}"
+
+
+def _overlap_or_raise(
+    error: IntegrityError, db: Session, staff_id: int, starts_at: datetime, ends_at: datetime, zone: ZoneInfo
+) -> HTTPException:
+    """409 con la hora de la cita que choca, si ha saltado la regla de solapamientos.
+
+    Sin el nombre del contacto (decisión T17). Cualquier otro error de integridad sigue su curso.
+    """
+    constraint = getattr(getattr(error.orig, "diag", None), "constraint_name", None)
+    if constraint != STAFF_OVERLAP_CONSTRAINT:
+        raise error
+    # La que choca ya está guardada: la restricción solo falla frente a citas confirmadas.
+    other = db.scalars(
+        select(Appointment)
+        .where(
+            Appointment.staff_id == staff_id,
+            Appointment.status != AppointmentStatus.CANCELLED,
+            Appointment.starts_at < ends_at,
+            Appointment.ends_at > starts_at,
+        )
+        .order_by(Appointment.starts_at)
+        .limit(1)
+    ).first()
+    if other is None:  # la cancelaron justo ahora: basta con volver a intentarlo
+        return HTTPException(status.HTTP_409_CONFLICT, OVERLAP_FALLBACK_MESSAGE)
+    start, end = other.starts_at.astimezone(zone), other.ends_at.astimezone(zone)
+    span = f"de {_clock(start)} a {_clock(end)}"
+    if start.date() != starts_at.astimezone(zone).date():
+        span = f"el {start:%d/%m/%Y} {span}"
+    return HTTPException(status.HTTP_409_CONFLICT, f"Esa persona ya tiene una cita {span}")
+
+
 def get_now() -> datetime:
     """La hora actual; las pruebas la sustituyen para no depender del día en que se ejecutan."""
     return datetime.now(UTC)
@@ -83,7 +134,10 @@ def get_now() -> datetime:
     "",
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_csrf)],
-    responses={422: {"description": "Hora, contacto, servicio o persona no válidos"}},
+    responses={
+        409: {"description": "Esa persona ya tiene una cita que se solapa"},
+        422: {"description": "Hora, contacto, servicio o persona no válidos"},
+    },
 )
 def create_appointment(
     body: AppointmentCreate,
@@ -139,16 +193,26 @@ def create_appointment(
 
     # La duración se copia: si el servicio cambia después, la cita conserva la suya. El fin se
     # calcula en UTC, así que una cita que cruza el cambio de horario dura lo que debe.
+    staff_id = staff.id
+    ends_at = starts_at + timedelta(minutes=service.duration_minutes)
     appointment = Appointment(
         contact_id=contact.id,
         service_id=service.id,
-        staff_id=staff.id,
+        staff_id=staff_id,
         starts_at=starts_at,
-        ends_at=starts_at + timedelta(minutes=service.duration_minutes),
+        ends_at=ends_at,
         duration_minutes=service.duration_minutes,
         created_by_id=user.id,
     )
     db.add(appointment)
+    try:
+        # Solapamientos (T17): decide la restricción de exclusión de PostgreSQL, no una consulta
+        # previa. Con dos peticiones a la vez para la misma persona, la segunda espera a que la
+        # primera termine y, si se pisan, falla aquí.
+        db.flush()
+    except IntegrityError as error:
+        db.rollback()
+        raise _overlap_or_raise(error, db, staff_id, starts_at, ends_at, zone) from None
     # El estado del contacto, en la misma transacción: o se guardan los dos cambios o ninguno. Sube
     # su versión (T13): quien editaba la ficha con la anterior recibirá 409 y verá el estado nuevo.
     if contact.status in PROMOTED_TO_SCHEDULED:

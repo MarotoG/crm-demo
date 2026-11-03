@@ -5,6 +5,7 @@ copiada del servicio, el estado del contacto y los permisos por rol.
 no dependan del día en que se ejecutan y alcancen los dos cambios de horario de 2027.
 """
 
+import itertools
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -443,3 +444,162 @@ def test_no_se_borra_nada_con_citas(db, escena, tabla):
         with db.begin_nested():
             db.execute(delete(tabla).where(tabla.id == objetivo))
     assert contar(db) == 1
+
+
+# --- Solapamientos (T17) ----------------------------------------------------------------
+
+CHOQUE = "Esa persona ya tiene una cita de 9:30 a 10:30"
+
+
+@pytest.fixture
+def ocupada(db, escena):
+    """La persona de la escena ya tiene una cita de 9:30 a 10:30 el 11/01/2027 (guardada por la API)."""
+    response = crear(datos(escena))
+    assert response.status_code == 201
+    return response.json()
+
+
+_otros = itertools.count(1)
+
+
+def para_otro(db, escena, persona: User | None = None, minutos: int = 60, **cambios) -> dict:
+    """Otra cita: otro contacto y, si hace falta, otro servicio con la duración indicada."""
+    otro = contacto(db, email=f"otro{next(_otros)}@example.com")
+    persona = persona or escena[2]
+    service = escena[1] if minutos == 60 and persona is escena[2] else servicio(db, [persona], minutos, f"S{minutos} {persona.id}")
+    return datos((otro, service, persona), **cambios)
+
+
+@pytest.mark.parametrize(
+    "starts_at, minutos",
+    [
+        ("2027-01-11T09:30", 60),  # la misma franja
+        ("2027-01-11T09:00", 60),  # termina dentro
+        ("2027-01-11T10:00", 60),  # empieza dentro
+        ("2027-01-11T09:45", 15),  # dentro del todo
+        ("2027-01-11T09:00", 120),  # la cubre entera
+        ("2027-01-11T10:25", 5),  # los últimos 5 minutos
+    ],
+)
+def test_misma_persona_franja_que_se_pisa_409(db, escena, ocupada, starts_at, minutos):
+    cuerpo = para_otro(db, escena, minutos=minutos, starts_at=starts_at)
+
+    response = crear(cuerpo)
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": CHOQUE}
+    assert contar(db) == 1
+    # Nada a medias: el otro contacto no pasa a «Cita agendada».
+    otro = db.get(Contact, cuerpo["contact_id"], populate_existing=True)
+    assert (otro.status, otro.version) == (ContactStatus.NEW, 1)
+
+
+@pytest.mark.parametrize("starts_at", ["2027-01-11T08:30", "2027-01-11T10:30"], ids=["acaba justo al empezar", "empieza justo al acabar"])
+def test_citas_seguidas_si(db, escena, ocupada, starts_at):
+    assert crear(para_otro(db, escena, starts_at=starts_at)).status_code == 201
+
+
+def test_otra_persona_a_la_misma_hora_si(db, usuarios, escena, ocupada):
+    assert crear(para_otro(db, escena, persona=usuarios[Role.ADMIN])).status_code == 201
+
+
+def test_la_misma_clienta_con_dos_personas_a_la_vez_si(db, usuarios, escena, ocupada):
+    # Tinte con una persona y, mientras, pedicura con otra (decisión T17): no hay regla por contacto.
+    pedicura = servicio(db, [usuarios[Role.RECEPTION]], 30, "Pedicure")
+
+    response = crear(datos((escena[0], pedicura, usuarios[Role.RECEPTION]), starts_at="2027-01-11T09:45"))
+
+    assert response.status_code == 201
+
+
+def test_la_cancelada_libera_la_franja(db, escena, ocupada):
+    # La ruta para cancelar llega en T19 (decisión T17): aquí se marca en la BD.
+    db.execute(update(Appointment).where(Appointment.id == ocupada["id"]).values(status="cancelled"))
+    db.flush()
+
+    assert crear(para_otro(db, escena)).status_code == 201
+
+
+@pytest.mark.parametrize("estado", ["completed", "no_show"])
+def test_realizada_y_no_presentado_siguen_ocupando(db, escena, ocupada, estado):
+    db.execute(update(Appointment).where(Appointment.id == ocupada["id"]).values(status=estado))
+    db.commit()
+
+    response = crear(para_otro(db, escena))
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": CHOQUE}
+
+
+def test_el_aviso_lleva_la_fecha_si_la_otra_empieza_otro_dia(db, escena):
+    assert crear(datos(escena, starts_at="2027-01-11T23:30")).status_code == 201
+
+    response = crear(para_otro(db, escena, starts_at="2027-01-12T00:00"))
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Esa persona ya tiene una cita el 11/01/2027 de 23:30 a 0:30"}
+
+
+def test_el_aviso_va_en_la_hora_de_la_clinica_tambien_en_verano(db, escena):
+    assert crear(datos(escena, starts_at="2027-07-01T09:30")).status_code == 201
+
+    response = crear(para_otro(db, escena, starts_at="2027-07-01T10:00"))
+
+    assert response.json() == {"detail": CHOQUE}
+
+
+def test_tras_un_choque_se_puede_seguir_reservando(db, escena, ocupada):
+    assert crear(para_otro(db, escena)).status_code == 409
+
+    response = crear(para_otro(db, escena, starts_at="2027-01-11T11:00"))
+
+    assert response.status_code == 201
+    assert contar(db) == 2
+
+
+def _insertar(db, escena, inicio: str, fin: str, minutos: int = 60, estado: str = "scheduled"):
+    contact, service, persona = escena
+    db.execute(
+        text(
+            "INSERT INTO appointments (contact_id, service_id, staff_id, starts_at, ends_at, duration_minutes, status)"
+            " VALUES (:c, :s, :p, :inicio, :fin, :m, :estado)"
+        ),
+        {"c": contact.id, "s": service.id, "p": persona.id, "inicio": inicio, "fin": fin, "m": minutos, "estado": estado},
+    )
+
+
+def test_la_bd_impide_el_solapamiento_aunque_se_salte_la_api(db, escena):
+    _insertar(db, escena, "2027-01-11 14:30+00", "2027-01-11 15:30+00")
+    # Seguidas y canceladas, sí.
+    _insertar(db, escena, "2027-01-11 15:30+00", "2027-01-11 16:30+00")
+    _insertar(db, escena, "2027-01-11 15:00+00", "2027-01-11 16:00+00", estado="cancelled")
+
+    with pytest.raises(IntegrityError, match="ex_appointments_staff_overlap"):
+        with db.begin_nested():
+            _insertar(db, escena, "2027-01-11 15:00+00", "2027-01-11 16:00+00")
+
+
+def test_la_bd_impide_reactivar_una_cancelada_que_se_pisa(db, escena):
+    # Importa para T19: deshacer una cancelación también debe respetar la regla.
+    _insertar(db, escena, "2027-01-11 14:30+00", "2027-01-11 15:30+00", estado="cancelled")
+    _insertar(db, escena, "2027-01-11 15:00+00", "2027-01-11 16:00+00")
+
+    with pytest.raises(IntegrityError, match="ex_appointments_staff_overlap"):
+        with db.begin_nested():
+            db.execute(update(Appointment).where(Appointment.status == "cancelled").values(status="scheduled"))
+
+
+def test_el_aviso_nombra_la_cita_que_de_verdad_choca(db, usuarios, escena):
+    # Alrededor de la que choca (9:30-10:30) hay citas que empiezan antes y no cuentan: una
+    # cancelada de la misma persona, una de otra persona y una seguida que acaba a las 9:30.
+    cancelada = crear(datos(escena, starts_at="2027-01-11T09:00")).json()
+    db.execute(update(Appointment).where(Appointment.id == cancelada["id"]).values(status="cancelled"))
+    db.commit()
+    assert crear(para_otro(db, escena, starts_at="2027-01-11T08:30")).status_code == 201
+    assert crear(para_otro(db, escena, starts_at="2027-01-11T09:30")).status_code == 201
+    assert crear(para_otro(db, escena, persona=usuarios[Role.ADMIN], starts_at="2027-01-11T09:10")).status_code == 201
+
+    response = crear(para_otro(db, escena, starts_at="2027-01-11T09:30"))
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": CHOQUE}

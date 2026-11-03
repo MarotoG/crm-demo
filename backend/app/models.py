@@ -4,6 +4,7 @@ from datetime import datetime
 from enum import StrEnum
 
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, MetaData, String, func, text, true
+from sqlalchemy.dialects.postgresql import ExcludeConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 # Nombres de restricciones predecibles, para que las migraciones sean estables.
@@ -224,7 +225,7 @@ class ServiceStaff(Base):
 class AppointmentStatus(StrEnum):
     """Estados de una cita (T03): Programada, Realizada, No presentado, Cancelada.
 
-    Toda cita nace «scheduled» (T16). Solo «cancelled» liberará la franja (T17); marcar
+    Toda cita nace «scheduled» (T16). Solo «cancelled» libera la franja (T17); marcar
     «completed» la primera cita pasará el contacto a Cliente (llegará con la asistencia).
     """
 
@@ -232,6 +233,10 @@ class AppointmentStatus(StrEnum):
     COMPLETED = "completed"
     NO_SHOW = "no_show"
     CANCELLED = "cancelled"
+
+
+# La API la reconoce por su nombre para responder 409 (app/appointments_routes.py).
+STAFF_OVERLAP_CONSTRAINT = "ex_appointments_staff_overlap"
 
 
 class Appointment(Base):
@@ -252,8 +257,19 @@ class Appointment(Base):
         # El fin no es un dato aparte: es el inicio más la duración (y por tanto posterior).
         CheckConstraint("ends_at = starts_at + duration_minutes * interval '1 minute'", name="ends_at_consistent"),
         CheckConstraint("version >= 1", name="version_positive"),
-        # La agenda de cada persona por fecha (T18) y, en T17, la regla de solapamientos.
+        # La agenda de cada persona por fecha (T18).
         Index("ix_appointments_staff_id_starts_at", "staff_id", "starts_at"),
+        # Solapamientos (T17): la misma persona no puede tener dos citas que se pisen. Intervalo
+        # [inicio, fin): una puede empezar justo cuando acaba otra. Las canceladas no cuentan.
+        # PostgreSQL lo comprueba en cada alta o cambio, también con peticiones simultáneas.
+        # Por contacto no hay regla (decisión T17): una clienta puede recibir dos servicios a la vez.
+        ExcludeConstraint(
+            ("staff_id", "="),
+            (text("tstzrange(starts_at, ends_at, '[)')"), "&&"),
+            name=STAFF_OVERLAP_CONSTRAINT,
+            using="gist",
+            where=text("status <> 'cancelled'"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
