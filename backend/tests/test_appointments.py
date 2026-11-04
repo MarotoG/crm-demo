@@ -644,9 +644,11 @@ def test_admin_y_recepcion_ven_la_agenda(db, escena, role):
     assert len(agenda(role, date="2027-01-11").json()) == 1
 
 
-@pytest.mark.parametrize("role", [Role.PROFESSIONAL, Role.CLIENT])
-def test_profesional_y_cliente_no_ven_la_agenda_todavia(db, escena, role):
-    assert agenda(role, date="2027-01-11").status_code == 403
+def test_el_cliente_no_ve_la_agenda(db, escena):
+    crear(datos(escena))
+
+    assert agenda(Role.CLIENT, date="2027-01-11").status_code == 403
+    assert agenda(Role.CLIENT, **{"from": "2027-01-01", "to": "2027-01-31"}).status_code == 403
 
 
 def test_filtro_por_persona_y_por_contacto(db, usuarios, escena):
@@ -684,6 +686,205 @@ def test_dia_no_valido_422(db, escena, dia):
 
 def test_sin_dia_422(db, escena):
     assert agenda().status_code == 422
+
+
+# --- Agenda de un intervalo: la vista del mes (T20) ---------------------------------------------
+
+
+def intervalo(desde: str, hasta: str, role: Role = Role.RECEPTION, **parametros):
+    return agenda(role, **{"from": desde, "to": hasta}, **parametros)
+
+
+def en_la_bd(db, escena, inicio: datetime, minutos: int = 60, persona: User | None = None) -> int:
+    """Una cita guardada directamente (también en el pasado, que la API no deja crear)."""
+    otro = contacto(db, email=f"bd{next(_otros)}@example.com")
+    cita = Appointment(
+        contact_id=otro.id,
+        service_id=escena[1].id,
+        staff_id=(persona or escena[2]).id,
+        starts_at=inicio,
+        ends_at=inicio + timedelta(minutes=minutos),
+        duration_minutes=minutos,
+    )
+    db.add(cita)
+    db.commit()
+    return cita.id
+
+
+def ids(response) -> list[int]:
+    assert response.status_code == 200, response.text
+    return [c["id"] for c in response.json()]
+
+
+def test_el_mes_entero_por_hora_con_sus_bordes(db, escena):
+    # Febrero de 2027 en Nueva York (−5 h): del 01/02 0:00 (05:00 UTC) al 01/03 0:00.
+    de_la_vispera = en_la_bd(db, escena, datetime(2027, 2, 1, 4, 30, tzinfo=UTC))  # 31/01 23:30-0:30
+    primera = en_la_bd(db, escena, datetime(2027, 2, 1, 5, 30, tzinfo=UTC))
+    ultima = en_la_bd(db, escena, datetime(2027, 3, 1, 4, 30, tzinfo=UTC))  # 28/02 23:30
+    en_la_bd(db, escena, datetime(2027, 1, 31, 15, 0, tzinfo=UTC))  # enero: no sale
+    en_la_bd(db, escena, datetime(2027, 3, 1, 5, 30, tzinfo=UTC))  # 01/03 0:30: no sale
+
+    assert ids(intervalo("2027-02-01", "2027-02-28")) == [de_la_vispera, primera, ultima]
+
+
+def test_un_solo_dia_como_intervalo_es_la_agenda_del_dia(db, escena):
+    crear(datos(escena))
+    crear(para_otro(db, escena, starts_at="2027-01-12T09:30"))
+
+    assert ids(intervalo("2027-01-11", "2027-01-11")) == ids(agenda(date="2027-01-11"))
+
+
+def test_el_mes_del_cambio_de_horario(db, escena):
+    # Marzo de 2027: el 14 se adelanta la hora; el 31 a las 23:00 son las 03:00 UTC del 01/04.
+    dentro = en_la_bd(db, escena, datetime(2027, 4, 1, 3, 0, tzinfo=UTC))
+    en_la_bd(db, escena, datetime(2027, 4, 1, 4, 0, tzinfo=UTC))  # 01/04 0:00 (−4 h): no sale
+
+    assert ids(intervalo("2027-03-01", "2027-03-31")) == [dentro]
+
+
+def test_el_mes_con_filtros_y_canceladas(db, usuarios, escena):
+    propia = crear(datos(escena)).json()
+    crear(para_otro(db, escena, persona=usuarios[Role.ADMIN], starts_at="2027-01-20T12:00"))
+    marcar(db, propia, status="cancelled", cancel_reason="clinic")
+
+    respuesta = intervalo("2027-01-01", "2027-01-31", staff_id=escena[2].id)
+
+    assert ids(respuesta) == [propia["id"]]
+    assert respuesta.json()[0]["status"] == "cancelled"
+    assert ids(intervalo("2027-01-01", "2027-01-31", contact_id=escena[0].id)) == [propia["id"]]
+
+
+def test_31_dias_si_y_32_no(db, escena):
+    assert intervalo("2027-01-01", "2027-01-31").status_code == 200
+    assert intervalo("2027-01-15", "2027-02-14").status_code == 200
+
+    response = intervalo("2027-01-01", "2027-02-01")
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == [
+        {"type": "dato_no_valido", "loc": ["query", "to"], "msg": "El intervalo no puede pasar de 31 días"}
+    ]
+
+
+@pytest.mark.parametrize(
+    "parametros, campo",
+    [
+        ({"from": "2027-01-31", "to": "2027-01-01"}, "to"),  # al revés
+        ({"from": "2027-01-01"}, "date"),  # falta el final
+        ({"to": "2027-01-31"}, "date"),  # falta el principio
+        ({"date": "2027-01-11", "from": "2027-01-01", "to": "2027-01-31"}, "date"),  # las dos cosas
+        ({"date": "2027-01-11", "to": "2027-01-31"}, "date"),
+        ({"from": "2027-02-30", "to": "2027-03-01"}, "from"),  # día imposible
+    ],
+)
+def test_intervalo_no_valido_422(db, escena, parametros, campo):
+    response = agenda(**parametros)
+
+    assert response.status_code == 422
+    assert [e["loc"] for e in response.json()["detail"]] == [["query", campo]]
+
+
+# --- Área del profesional (T20): solo su agenda y la ficha de sus contactos ------------------------
+
+
+def sesion_por_email(email: str) -> TestClient:
+    client = TestClient(fastapi_app)
+    assert client.post("/api/auth/login", json={"email": email, "password": PASSWORD}).status_code == 200
+    return client
+
+
+@pytest.fixture
+def dos_profesionales(db, usuarios, escena):
+    """La profesional de la escena con una cita el 11/01; otra profesional con una ese día y la
+    admin con otra: cada una ve solo la suya."""
+    otra = cuenta(db, "pro2@prueba.example.com", Role.PROFESSIONAL)
+    suya = crear(datos(escena)).json()
+    de_otra = crear(para_otro(db, escena, persona=otra, starts_at="2027-01-11T09:30")).json()
+    de_admin = crear(para_otro(db, escena, persona=usuarios[Role.ADMIN], starts_at="2027-01-11T12:00")).json()
+    return {"suya": suya, "otra": otra, "de_otra": de_otra, "de_admin": de_admin}
+
+
+def test_la_profesional_solo_ve_sus_citas(db, escena, dos_profesionales):
+    propia = dos_profesionales["suya"]["id"]
+
+    assert ids(agenda(Role.PROFESSIONAL, date="2027-01-11")) == [propia]
+    assert ids(intervalo("2027-01-01", "2027-01-31", Role.PROFESSIONAL)) == [propia]
+    # Con su propio id en el filtro, lo mismo.
+    assert ids(agenda(Role.PROFESSIONAL, date="2027-01-11", staff_id=escena[2].id)) == [propia]
+    # La otra profesional, solo la suya.
+    otra = sesion_por_email("pro2@prueba.example.com")
+    assert [c["id"] for c in otra.get("/api/appointments", params={"date": "2027-01-11"}).json()] == [
+        dos_profesionales["de_otra"]["id"]
+    ]
+
+
+@pytest.mark.parametrize("ajena", ["otra", "admin"])
+def test_la_profesional_no_ve_la_agenda_de_otra_persona_cambiando_la_direccion(db, usuarios, dos_profesionales, ajena):
+    staff_id = dos_profesionales["otra"].id if ajena == "otra" else usuarios[Role.ADMIN].id
+
+    for parametros in ({"date": "2027-01-11"}, {"from": "2027-01-01", "to": "2027-01-31"}):
+        response = agenda(Role.PROFESSIONAL, staff_id=staff_id, **parametros)
+        assert response.status_code == 403
+        assert response.json() == {"detail": "Solo puedes ver tus citas"}
+
+
+def test_el_filtro_por_contacto_no_le_abre_citas_ajenas(db, dos_profesionales):
+    # El contacto de la cita de la otra profesional: la suya no sale, aunque se filtre por él.
+    contacto_ajeno = dos_profesionales["de_otra"]["contact_id"]
+
+    assert ids(agenda(Role.PROFESSIONAL, date="2027-01-11", contact_id=contacto_ajeno)) == []
+
+
+def test_admin_y_recepcion_que_atienden_ven_solo_las_suyas_con_el_filtro(db, usuarios, dos_profesionales):
+    # «Solo mis citas» (T20) es el filtro por persona con su propia cuenta.
+    assert ids(agenda(Role.ADMIN, date="2027-01-11", staff_id=usuarios[Role.ADMIN].id)) == [dos_profesionales["de_admin"]["id"]]
+    assert len(ids(agenda(Role.ADMIN, date="2027-01-11"))) == 3
+
+
+def ficha(contacto_id: int, client: TestClient | None = None):
+    client = client or sesion_de(Role.PROFESSIONAL)[0]
+    return client.get(f"/api/contacts/{contacto_id}")
+
+
+def test_la_profesional_abre_la_ficha_de_sus_contactos(db, escena, dos_profesionales):
+    response = ficha(escena[0].id)
+
+    assert response.status_code == 200
+    assert response.json()["id"] == escena[0].id
+    assert response.json()["status"] == "scheduled"
+
+
+def test_la_ficha_tambien_con_una_cita_pasada_o_cancelada(db, escena):
+    pasada = en_la_bd(db, escena, datetime(2026, 12, 1, 15, 0, tzinfo=UTC))
+    cancelada = crear(para_otro(db, escena, starts_at="2027-01-20T10:00")).json()
+    marcar(db, cancelada, status="cancelled", cancel_reason="client_request")
+
+    for cita_id in (pasada, cancelada["id"]):
+        assert ficha(db.get(Appointment, cita_id).contact_id).status_code == 200
+
+
+def test_la_ficha_de_un_contacto_sin_citas_con_ella_es_404_como_si_no_existiera(db, escena, dos_profesionales):
+    sin_citas = contacto(db, email="nadie@example.com")
+    db.commit()
+    de_la_otra = dos_profesionales["de_otra"]["contact_id"]
+
+    for contacto_id in (sin_citas.id, de_la_otra, 999_999):
+        response = ficha(contacto_id)
+        assert response.status_code == 404
+        assert response.json() == {"detail": "Contacto no encontrado"}
+    # Y la otra profesional tampoco abre los de la primera.
+    assert ficha(escena[0].id, sesion_por_email("pro2@prueba.example.com")).status_code == 404
+
+
+def test_la_profesional_no_lista_ni_cambia_contactos(db, escena, dos_profesionales):
+    client, csrf = sesion_de(Role.PROFESSIONAL)
+    contacto_id = escena[0].id
+
+    assert client.get("/api/contacts").status_code == 403
+    assert client.put(f"/api/contacts/{contacto_id}", json={}, headers=csrf).status_code == 403
+    assert client.put(f"/api/contacts/{contacto_id}/status", json={}, headers=csrf).status_code == 403
+    assert client.post("/api/contacts", json={}, headers=csrf).status_code == 403
+    assert escena[0].status == ContactStatus.SCHEDULED
 
 
 # --- Reprogramar (T19) ----------------------------------------------------------------------

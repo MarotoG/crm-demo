@@ -1,11 +1,26 @@
-// Pruebas de la agenda y del formulario de cita (T18), y de reprogramar y cancelar (T19), con una API falsa en fetch.
+// Pruebas de la agenda y del formulario de cita (T18), de reprogramar y cancelar (T19) y de la vista del mes y
+// «Mi agenda» del profesional (T20), con una API falsa en fetch.
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { diaValido, formatoDia, horaEn, hoyEnLaClinica, minutosDesde, sePuedeCambiar, sumarDias } from "./Agenda";
+import {
+  diaValido,
+  formatoDia,
+  formatoMes,
+  horaEn,
+  hoyEnLaClinica,
+  minutosDesde,
+  porDia,
+  primeroDeMes,
+  resumenPorServicio,
+  sePuedeCambiar,
+  sumarDias,
+  sumarMeses,
+  ultimoDeMes,
+} from "./Agenda";
 import App from "./App";
 import type { CitaAgenda, Contacto, ContactoDetalle, PersonaServicio, Servicio } from "./api";
 
@@ -74,15 +89,17 @@ const DE_BEA = cita(2, "2027-01-11T23:30:00-05:00", "2027-01-12T00:30:00-05:00",
 let rutas: Record<string, (llamada: Llamada) => Respuesta>;
 let llamadas: Llamada[];
 
-/** La agenda falsa: filtra por día, persona y contacto como la API. */
+/** La agenda falsa: filtra por día (o intervalo, T20), persona y contacto como la API. */
 function agendaFalsa(citas: CitaAgenda[]) {
   return ({ consulta }: Llamada): Respuesta => {
     const dia = consulta.get("date");
+    const [desde, hasta] = dia ? [dia, dia] : [consulta.get("from") ?? "", consulta.get("to") ?? ""];
+    const dentro = (iso: string) => iso.slice(0, 10) >= desde && iso.slice(0, 10) <= hasta;
     const persona = consulta.get("staff_id");
     const contacto = consulta.get("contact_id");
     const delDia = citas.filter(
       (c) =>
-        (c.starts_at.startsWith(dia ?? "") || c.ends_at.startsWith(dia ?? "")) &&
+        (dentro(c.starts_at) || dentro(c.ends_at)) &&
         (!persona || String(c.staff_id) === persona) &&
         (!contacto || String(c.contact_id) === contacto),
     );
@@ -709,5 +726,271 @@ describe("fechas de la agenda", () => {
   it("«hoy» es el día de Nueva York, no el del navegador", () => {
     // 03:30 UTC del 12/01 son las 22:30 del 11/01 en Nueva York.
     expect(hoyEnLaClinica(new Date("2027-01-12T03:30:00Z"))).toBe("2027-01-11");
+  });
+});
+
+// --- La vista del mes (T20) ------------------------------------------------------------------------
+
+// Enero de 2027: Ana el 11 (Botox), Bea el 11 por la noche (Peel), Carla el 20 (Botox) y una
+// cancelada el 25 (Botox); la de Dani empieza el 31/12 a las 23:30 y acaba ya en enero.
+const DE_CARLA = cita(3, "2027-01-20T12:00:00-05:00", "2027-01-20T13:00:00-05:00", { contact_id: 9, contact_name: "Carla Diaz" });
+const CANCELADA = cita(4, "2027-01-25T10:00:00-05:00", "2027-01-25T11:00:00-05:00", {
+  contact_id: 10,
+  contact_name: "Eva Gil",
+  status: "cancelled",
+  cancel_reason: "client_request",
+});
+const DE_DANI = cita(5, "2026-12-31T23:30:00-05:00", "2027-01-01T00:30:00-05:00", { contact_id: 11, contact_name: "Dani Mora" });
+const DEL_MES = [DE_DANI, DE_ANA, DE_BEA, DE_CARLA, CANCELADA];
+
+const mesesPedidos = () =>
+  llamadas.filter((l) => l.ruta === "/api/appointments" && l.consulta.has("from")).map((l) => `${l.consulta.get("from")}/${l.consulta.get("to")}`);
+
+/** Los días del mes y, en cada uno, sus citas (contacto). */
+function diasDelMes() {
+  return [...document.querySelectorAll(".mes__dia")].map((d) => [
+    d.querySelector("h4")?.firstChild?.textContent,
+    [...d.querySelectorAll(".cita__contacto")].map((e) => e.textContent),
+  ]);
+}
+
+describe("vista del mes", () => {
+  beforeEach(() => {
+    rutas["GET /api/appointments"] = agendaFalsa(DEL_MES);
+  });
+
+  it("«Mes» pide el mes entero de una vez y agrupa las citas por día", async () => {
+    const u = abrir();
+    await filas();
+
+    await u.click(screen.getByRole("button", { name: "Mes" }));
+
+    expect(await screen.findByRole("heading", { name: /^enero de 2027/ })).toBeTruthy();
+    await waitFor(() => expect(diasDelMes()).toHaveLength(4));
+    expect(diasDelMes()).toEqual([
+      ["viernes, 1 de enero de 2027", ["Dani Mora"]], // empezó la víspera
+      ["lunes, 11 de enero de 2027", ["Ana Lopez", "Bea Ruiz"]],
+      ["miércoles, 20 de enero de 2027", ["Carla Diaz"]],
+      ["lunes, 25 de enero de 2027", ["Eva Gil"]],
+    ]);
+    expect(mesesPedidos()).toEqual(["2027-01-01/2027-01-31"]);
+    expect(screen.getByRole("button", { name: "Mes" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "Día" }).getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("arriba, cuántas Programadas hay de cada servicio, sin las canceladas", async () => {
+    abrir("/agenda?vista=mes&fecha=2027-01-11");
+
+    const resumen = await screen.findByText(/Programadas este mes/);
+    // Botox: Dani, Ana y Carla (la de Eva está cancelada); Peel: Bea.
+    expect(resumen.closest("p")?.textContent).toBe("Programadas este mes: Botox: 3 · Peel: 1");
+  });
+
+  it("la dirección guarda la vista: al recargar sigue en el mes", async () => {
+    abrir("/agenda?vista=mes&fecha=2027-01-20");
+
+    await waitFor(() => expect(diasDelMes()).toHaveLength(4));
+    expect(mesesPedidos()).toEqual(["2027-01-01/2027-01-31"]);
+    expect(diasPedidos().filter(Boolean)).toEqual([]); // ningún día suelto
+  });
+
+  it("mes anterior, siguiente y este mes", async () => {
+    const u = abrir("/agenda?vista=mes&fecha=2027-01-11");
+    await screen.findByRole("heading", { name: /^enero de 2027/ });
+
+    await u.click(screen.getByRole("button", { name: "Mes siguiente →" }));
+    await screen.findByRole("heading", { name: /^febrero de 2027/ });
+    expect(await screen.findByText("No hay citas este mes.")).toBeTruthy();
+    await u.click(screen.getByRole("button", { name: "← Mes anterior" }));
+    await u.click(screen.getByRole("button", { name: "← Mes anterior" }));
+    await screen.findByRole("heading", { name: /^diciembre de 2026/ });
+    await u.click(screen.getByRole("button", { name: "Este mes" }));
+
+    const hoy = hoyEnLaClinica();
+    await waitFor(() => expect(mesesPedidos().at(-1)).toBe(`${primeroDeMes(hoy)}/${ultimoDeMes(hoy)}`));
+    expect(mesesPedidos().slice(0, 4)).toEqual([
+      "2027-01-01/2027-01-31",
+      "2027-02-01/2027-02-28",
+      "2027-01-01/2027-01-31",
+      "2026-12-01/2026-12-31",
+    ]);
+    expect(screen.getByRole("button", { name: "Este mes" }).hasAttribute("disabled")).toBe(true);
+  });
+
+  it("«Ver el día» abre ese día en la vista del día", async () => {
+    const u = abrir("/agenda?vista=mes&fecha=2027-01-11");
+    await waitFor(() => expect(diasDelMes()).toHaveLength(4));
+    const veinte = [...document.querySelectorAll(".mes__dia")][2] as HTMLElement;
+
+    await u.click(within(veinte).getByRole("button", { name: "Ver el día" }));
+
+    expect(await screen.findByRole("heading", { name: /miércoles, 20 de enero de 2027/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Día" }).getAttribute("aria-pressed")).toBe("true");
+    await waitFor(() => expect(diasPedidos().at(-1)).toBe("2027-01-20"));
+  });
+
+  it("recepción cancela desde el mes, sin ir día a día, y el mes se recarga", async () => {
+    rutas["POST /api/appointments/3/cancel"] = () => ({ status: 200, cuerpo: { ...DE_CARLA, status: "cancelled" } });
+    const u = abrir("/agenda?vista=mes&fecha=2027-01-11");
+
+    await u.click((await fila("Carla Diaz")).getByRole("button", { name: /^Cancelar la cita/ }));
+    const recuadro = within(await screen.findByRole("form", { name: "Cancelar la cita" }));
+    await u.selectOptions(recuadro.getByLabelText("Motivo"), "Lo pidió la clienta");
+    await u.click(recuadro.getByRole("button", { name: "Confirmar cancelación" }));
+
+    expect((await screen.findByRole("status")).textContent).toBe("Cita cancelada: Carla Diaz, 12:00–13:00 (Botox)");
+    await waitFor(() => expect(mesesPedidos()).toHaveLength(2));
+    expect(screen.getByRole("heading", { name: /^enero de 2027/ })).toBeTruthy();
+  });
+
+  it("y reprograma desde el mes con el mismo formulario", async () => {
+    const u = abrir("/agenda?vista=mes&fecha=2027-01-11");
+
+    await u.click((await fila("Carla Diaz")).getByRole("button", { name: /^Reprogramar/ }));
+
+    const formulario = within(await screen.findByRole("form", { name: "Reprogramar cita" }));
+    expect((formulario.getByLabelText("Día") as HTMLInputElement).value).toBe("2027-01-20");
+  });
+
+  it("la cancelada sale tachada con su motivo, como en el día", async () => {
+    abrir("/agenda?vista=mes&fecha=2027-01-11");
+
+    const eva = (await fila("Eva Gil")).getByText(/Cancelada/);
+    expect(eva.textContent).toContain("Cancelada (Lo pidió la clienta)");
+    expect(eva.closest("li")?.className).toBe("cita cita--cancelada");
+  });
+
+  it("si en el mes todo está cancelado, el resumen lo dice", async () => {
+    rutas["GET /api/appointments"] = agendaFalsa([CANCELADA]);
+    abrir("/agenda?vista=mes&fecha=2027-01-11");
+
+    expect(await screen.findByText("No hay ninguna cita Programada este mes.")).toBeTruthy();
+  });
+
+  it("el filtro por persona también vale en el mes", async () => {
+    const u = abrir("/agenda?vista=mes&fecha=2027-01-11");
+    await waitFor(() => expect(diasDelMes()).toHaveLength(4));
+
+    await u.selectOptions(screen.getByLabelText("Persona"), P_ADMIN.email);
+
+    await waitFor(() => expect(diasDelMes()).toEqual([["lunes, 11 de enero de 2027", ["Bea Ruiz"]]]));
+    expect(llamadas.at(-1)?.consulta.get("staff_id")).toBe(String(P_ADMIN.id));
+  });
+});
+
+describe("«Solo mis citas» (T20)", () => {
+  it("aplica el filtro por persona con la propia cuenta", async () => {
+    rutas["GET /api/appointments"] = agendaFalsa([DE_ANA, { ...DE_BEA, staff_id: RECEPCION.id }]);
+    const u = abrir();
+    await filas();
+
+    await u.click(screen.getByRole("button", { name: "Solo mis citas" }));
+
+    await waitFor(async () => expect(await filas()).toHaveLength(1));
+    expect(llamadas.at(-1)?.consulta.get("staff_id")).toBe(String(RECEPCION.id));
+    expect(screen.getByRole("button", { name: "Solo mis citas" }).hasAttribute("disabled")).toBe(true);
+  });
+});
+
+// --- «Mi agenda» del profesional (T20) -------------------------------------------------------------
+
+const PROFESIONAL = { id: 3, email: P_PRO.email, role: "professional", csrf_token: "csrf-pro" };
+
+describe("«Mi agenda» del profesional", () => {
+  beforeEach(() => {
+    rutas["GET /api/auth/me"] = () => ({ status: 200, cuerpo: PROFESIONAL });
+    // La API ya le devuelve solo las suyas.
+    rutas["GET /api/appointments"] = agendaFalsa([DE_ANA, DE_CARLA, CANCELADA]);
+  });
+
+  it("solo lectura: sus citas, sin dar cita, sin filtro de persona y sin botones", async () => {
+    abrir("/mi-agenda?fecha=2027-01-11");
+
+    expect(await screen.findByRole("heading", { name: "Mi agenda" })).toBeTruthy();
+    expect(await filas()).toEqual(["9:30–10:30Ana LopezBotox"]); // sin su propio email
+    expect(screen.queryByRole("button", { name: "Nueva cita" })).toBeNull();
+    expect(screen.queryByLabelText("Persona")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Solo mis citas" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Reprogramar/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Cancelar la cita/ })).toBeNull();
+    expect(screen.getByRole("link", { name: "Ana Lopez" }).getAttribute("href")).toBe("/contactos/7");
+  });
+
+  it("no envía filtro de persona (lo pone la API), ni aunque la dirección lo lleve, ni pide las personas asignables", async () => {
+    abrir("/mi-agenda?fecha=2027-01-11&persona=1");
+    await filas();
+
+    const citas = llamadas.filter((l) => l.ruta === "/api/appointments");
+    expect(citas.length).toBeGreaterThan(0);
+    expect(citas.every((l) => !l.consulta.has("staff_id"))).toBe(true);
+    expect(llamadas.some((l) => l.ruta === "/api/services/staff")).toBe(false);
+  });
+
+  it("la vista del mes, con su resumen y la cancelada tachada", async () => {
+    const u = abrir("/mi-agenda?fecha=2027-01-11");
+    await filas();
+
+    await u.click(screen.getByRole("button", { name: "Mes" }));
+
+    await waitFor(() => expect(diasDelMes()).toHaveLength(3));
+    expect((await screen.findByText(/Programadas este mes/)).closest("p")?.textContent).toBe("Programadas este mes: Botox: 2");
+    expect((await fila("Eva Gil")).getByText(/Cancelada/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Cancelar la cita/ })).toBeNull();
+  });
+
+  it("sin citas, se lo dice a ella", async () => {
+    rutas["GET /api/appointments"] = () => ({ status: 200, cuerpo: [] });
+    abrir("/mi-agenda?fecha=2027-01-11");
+
+    expect(await screen.findByText("No tienes citas este día.")).toBeTruthy();
+  });
+
+  it.each(["/mi-agenda?nueva=1&contacto=7", "/mi-agenda?fecha=2027-01-11&reprogramar=1"])(
+    "una dirección con el formulario (%s) no lo abre",
+    async (ruta) => {
+      abrir(ruta);
+      await screen.findByRole("heading", { name: "Mi agenda" });
+      await waitFor(() => expect(llamadas.some((l) => l.ruta === "/api/appointments")).toBe(true));
+
+      expect(screen.queryByRole("form")).toBeNull();
+      expect(llamadas.some((l) => l.ruta === "/api/services" || l.ruta === "/api/contacts/7")).toBe(false);
+    },
+  );
+});
+
+describe("fechas del mes", () => {
+  it("primer y último día, y meses que cruzan el año", () => {
+    expect(primeroDeMes("2027-02-17")).toBe("2027-02-01");
+    expect(ultimoDeMes("2027-02-17")).toBe("2027-02-28");
+    expect(ultimoDeMes("2028-02-01")).toBe("2028-02-29"); // bisiesto
+    expect(ultimoDeMes("2027-12-31")).toBe("2027-12-31");
+    expect(sumarMeses("2027-01-31", 1)).toBe("2027-02-01");
+    expect(sumarMeses("2027-01-15", -1)).toBe("2026-12-01");
+    expect(sumarMeses("2026-12-01", 1)).toBe("2027-01-01");
+    expect(formatoMes("2027-03-14")).toBe("marzo de 2027");
+  });
+
+  it("agrupa por el día en Nueva York, no por el UTC", () => {
+    // 04:30 UTC del 12/01 son las 23:30 del 11/01 en Nueva York.
+    const tarde = cita(1, "2027-01-12T04:30:00Z", "2027-01-12T05:30:00Z");
+    expect(porDia([tarde], "2027-01-01").map(([dia]) => dia)).toEqual(["2027-01-11"]);
+  });
+
+  it("el resumen cuenta solo las Programadas, de más a menos y a igualdad por nombre", () => {
+    const peel = { service_name: "Peel" };
+    const resumen = resumenPorServicio([
+      cita(1, "", "", peel),
+      cita(2, "", ""),
+      cita(3, "", "", { service_name: "Acne" }),
+      cita(4, "", "", peel),
+      cita(5, "", "", { status: "cancelled" }),
+      cita(6, "", "", { status: "cancelled" }),
+      cita(7, "", "", { status: "completed" }),
+    ]);
+    expect(resumen).toEqual([
+      { servicio: "Peel", total: 2 },
+      { servicio: "Acne", total: 1 },
+      { servicio: "Botox", total: 1 },
+    ]);
   });
 });

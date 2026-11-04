@@ -3,6 +3,9 @@
 // recargar y ahí irán después sus citas y seguimientos. En T14, el responsable y los
 // botones de estado comercial. En T18, «Dar cita», que abre el formulario de la agenda con el contacto.
 //
+// El profesional (T20) la abre desde «Mi agenda», en solo lectura: sin editar, sin cambiar el
+// estado y sin dar cita. La API solo se la da si el contacto tiene alguna cita con él (si no, 404).
+//
 // Bloqueo optimista: la ficha guarda la versión que leyó y la envía al guardar o al cambiar
 // el estado. Si otra persona guardó antes, la API responde 409; entonces se pide la ficha
 // actual y, si su versión ha cambiado, se muestra con un aviso en vez de pisar el cambio ajeno.
@@ -110,6 +113,7 @@ export default function FichaContacto() {
 
   if (sesion.tipo !== "dentro") return null;
   const csrf = sesion.usuario.csrf_token;
+  const soloLectura = sesion.usuario.role === "professional";
 
   /** Ante un 409: si la versión ha cambiado, se muestra la ficha actual con el aviso. */
   async function otraVersion(leida: number): Promise<boolean> {
@@ -157,10 +161,13 @@ export default function FichaContacto() {
   return (
     <section className="tarjeta" aria-labelledby="titulo-ficha">
       <p>
-        <Link to="/contactos">← Volver a contactos</Link>
+        {soloLectura ? <Link to="/mi-agenda">← Volver a mi agenda</Link> : <Link to="/contactos">← Volver a contactos</Link>}
       </p>
       {estado.tipo === "cargando" && <p>Cargando la ficha…</p>}
-      {estado.tipo === "no-existe" && <h2 id="titulo-ficha">Este contacto no existe</h2>}
+      {estado.tipo === "no-existe" && (
+        // Al profesional, la API responde igual si no existe o si no tiene citas con él (T20).
+        <h2 id="titulo-ficha">{soloLectura ? "Este contacto no existe o no tiene citas contigo" : "Este contacto no existe"}</h2>
+      )}
       {estado.tipo === "error" && (
         <>
           <h2 id="titulo-ficha">No se pudo cargar la ficha</h2>
@@ -175,6 +182,7 @@ export default function FichaContacto() {
       {estado.tipo === "ok" && (
         <Ficha
           ficha={estado.ficha}
+          soloLectura={soloLectura}
           editando={editando}
           responsables={responsables}
           cambiandoEstado={cambiandoEstado}
@@ -197,6 +205,7 @@ export default function FichaContacto() {
 
 function Ficha({
   ficha,
+  soloLectura,
   editando,
   responsables,
   cambiandoEstado,
@@ -209,6 +218,7 @@ function Ficha({
   alCambiarEstado,
 }: {
   ficha: ContactoDetalle;
+  soloLectura: boolean;
   editando: boolean;
   responsables: EstadoResponsables;
   cambiandoEstado: boolean;
@@ -300,32 +310,36 @@ function Ficha({
               </>
             )}
           </dl>
-          <div className="acciones">
-            {/* Un Perdido no puede recibir cita (T16): primero hay que reabrirlo. */}
-            {ficha.status !== "lost" && (
-              <button type="button" onClick={() => navegar(`/agenda?nueva=1&contacto=${ficha.id}`)} disabled={cambiandoEstado}>
-                Dar cita
-              </button>
-            )}
-            <button type="button" className={ficha.status === "lost" ? undefined : "secundario"} onClick={alEditar} disabled={cambiandoEstado}>
-              Editar
-            </button>
-            {ACCIONES_DE_ESTADO[ficha.status].map(({ destino, texto }) => (
-              <button
-                key={destino}
-                type="button"
-                className="secundario"
-                disabled={cambiandoEstado}
-                onClick={() => alCambiarEstado(destino)}
-              >
-                {texto}
-              </button>
-            ))}
-          </div>
-          {(ficha.status === "new" || ficha.status === "contacted") && (
-            <p className="ayuda">Al darle una cita pasa solo a «Cita agendada»; «Cliente» llegará al marcar Realizada la primera.</p>
+          {!soloLectura && (
+            <>
+              <div className="acciones">
+                {/* Un Perdido no puede recibir cita (T16): primero hay que reabrirlo. */}
+                {ficha.status !== "lost" && (
+                  <button type="button" onClick={() => navegar(`/agenda?nueva=1&contacto=${ficha.id}`)} disabled={cambiandoEstado}>
+                    Dar cita
+                  </button>
+                )}
+                <button type="button" className={ficha.status === "lost" ? undefined : "secundario"} onClick={alEditar} disabled={cambiandoEstado}>
+                  Editar
+                </button>
+                {ACCIONES_DE_ESTADO[ficha.status].map(({ destino, texto }) => (
+                  <button
+                    key={destino}
+                    type="button"
+                    className="secundario"
+                    disabled={cambiandoEstado}
+                    onClick={() => alCambiarEstado(destino)}
+                  >
+                    {texto}
+                  </button>
+                ))}
+              </div>
+              {(ficha.status === "new" || ficha.status === "contacted") && (
+                <p className="ayuda">Al darle una cita pasa solo a «Cita agendada»; «Cliente» llegará al marcar Realizada la primera.</p>
+              )}
+              {ficha.status === "lost" && <p className="ayuda">Para darle una cita, reábrelo primero.</p>}
+            </>
           )}
-          {ficha.status === "lost" && <p className="ayuda">Para darle una cita, reábrelo primero.</p>}
         </>
       )}
     </>

@@ -163,11 +163,34 @@ describe("secciones por rol (T18)", () => {
     expect(within(barra).getByRole("link", { name: "Agenda" }).getAttribute("aria-current")).toBe("page");
   });
 
-  it("profesional y cliente, con una sola sección, no tienen barra", async () => {
+  it("el profesional entra en «Mi agenda» y su barra tiene «Mi agenda» y «Mis servicios» (T20)", async () => {
     conSesion({ ...RECEPCION, role: "professional" });
     abrir("/");
 
-    expect(await screen.findByRole("heading", { name: "Área de profesional" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Mi agenda" })).toBeTruthy();
+    const barra = screen.getByRole("navigation", { name: "Secciones" });
+    expect(within(barra).getAllByRole("link").map((a) => a.textContent)).toEqual(["Mi agenda", "Mis servicios"]);
+  });
+
+  it("la dirección de antes de T20 (/profesional) lleva a «Mi agenda»", async () => {
+    conSesion({ ...RECEPCION, role: "professional" });
+    abrir("/profesional");
+
+    expect(await screen.findByRole("heading", { name: "Mi agenda" })).toBeTruthy();
+  });
+
+  it.each(["/agenda", "/contactos", "/servicios", "/usuarios"])("el profesional no tiene acceso a %s", async (ruta) => {
+    conSesion({ ...RECEPCION, role: "professional" });
+    abrir(ruta);
+
+    expect(await screen.findByText("No tienes acceso a esta área")).toBeTruthy();
+  });
+
+  it("el cliente, con una sola sección, no tiene barra", async () => {
+    conSesion({ ...RECEPCION, role: "client" });
+    abrir("/");
+
+    expect(await screen.findByRole("heading", { name: "Área de cliente" })).toBeTruthy();
     expect(screen.queryByRole("navigation", { name: "Secciones" })).toBeNull();
   });
 

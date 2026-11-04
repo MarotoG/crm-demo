@@ -334,6 +334,14 @@ export function listarCitas(dia: string, filtros: { persona?: number; contacto?:
   return peticion<CitaAgenda[]>(`/api/appointments?${parametros}`);
 }
 
+/** Las citas de un intervalo de días (T20, la vista del mes; 31 como mucho), por hora. Para el
+ * profesional, la API pone sola el filtro por su persona. */
+export function listarCitasEntre(desde: string, hasta: string, filtros: { persona?: number } = {}): Promise<CitaAgenda[]> {
+  const parametros = new URLSearchParams({ from: desde, to: hasta });
+  if (filtros.persona !== undefined) parametros.append("staff_id", String(filtros.persona));
+  return peticion<CitaAgenda[]>(`/api/appointments?${parametros}`);
+}
+
 /** 409 si quien la realiza ya tiene otra cita que se pisa (T17); el mensaje dice cuál. */
 export function crearCita(datos: NuevaCita, csrf: string): Promise<Omit<CitaAgenda, "contact_name" | "service_name" | "staff_email">> {
   return peticion("/api/appointments", { method: "POST", cuerpo: datos, csrf });

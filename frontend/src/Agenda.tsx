@@ -12,6 +12,11 @@
 // Reprogramar y cancelar (T19): solo las citas Programadas que no han empezado. Reprogramar abre
 // el mismo formulario con el contacto y el servicio fijos (/agenda?reprogramar=12); cancelar pide
 // el motivo en la propia fila. Las canceladas siguen en la lista, atenuadas y con su motivo.
+//
+// Vista del mes (T20, ?vista=mes): todas las citas del mes agrupadas por día, con cuántas
+// Programadas hay de cada servicio (para preparar el material) y los mismos botones, sin ir día a
+// día. «Mi agenda» del profesional (/mi-agenda) es esta misma agenda en solo lectura: la API le
+// devuelve solo sus citas, y aquí no hay formulario, filtro por persona ni botones.
 
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router";
@@ -21,6 +26,7 @@ import {
   crearCita,
   ErrorApi,
   listarCitas,
+  listarCitasEntre,
   listarContactos,
   listarPersonasAsignables,
   listarServicios,
@@ -100,6 +106,50 @@ export function formatoDia(dia: string): string {
   return DIA.format(mediodia(dia));
 }
 
+const MES = new Intl.DateTimeFormat("es-ES", { timeZone: "UTC", month: "long", year: "numeric" });
+
+/** «2027-02-17» → «2027-02-01». */
+export function primeroDeMes(dia: string): string {
+  return `${dia.slice(0, 7)}-01`;
+}
+
+/** El día 1 del mes que está `meses` antes o después del de `dia`. */
+export function sumarMeses(dia: string, meses: number): string {
+  const [anio, mes] = dia.split("-").map(Number);
+  return new Date(Date.UTC(anio, mes - 1 + meses, 1, 12)).toISOString().slice(0, 10);
+}
+
+/** El último día del mes de `dia` (28, 29, 30 o 31). */
+export function ultimoDeMes(dia: string): string {
+  return sumarDias(sumarMeses(dia, 1), -1);
+}
+
+/** «2027-02-17» → «febrero de 2027». */
+export function formatoMes(dia: string): string {
+  return MES.format(mediodia(primeroDeMes(dia)));
+}
+
+/** Las citas del mes agrupadas por el día (en la clínica) en que empiezan, en orden. La que empieza
+ * la víspera del día 1 y acaba ya en el mes (23:30-0:30) sale en el día 1. */
+export function porDia(citas: CitaAgenda[], primero: string): [string, CitaAgenda[]][] {
+  const grupos = new Map<string, CitaAgenda[]>();
+  for (const cita of citas) {
+    const suDia = enLaClinica(new Date(cita.starts_at)).dia;
+    const clave = suDia < primero ? primero : suDia;
+    grupos.set(clave, [...(grupos.get(clave) ?? []), cita]);
+  }
+  return [...grupos.entries()].sort(([a], [b]) => a.localeCompare(b));
+}
+
+/** Cuántas Programadas hay de cada servicio, de más a menos (a igualdad, por nombre). */
+export function resumenPorServicio(citas: CitaAgenda[]): { servicio: string; total: number }[] {
+  const cuenta = new Map<string, number>();
+  for (const c of citas) if (c.status === "scheduled") cuenta.set(c.service_name, (cuenta.get(c.service_name) ?? 0) + 1);
+  return [...cuenta.entries()]
+    .map(([servicio, total]) => ({ servicio, total }))
+    .sort((a, b) => b.total - a.total || a.servicio.localeCompare(b.servicio));
+}
+
 /** Minutos desde las 0:00 de `dia` (en la clínica) hasta el instante: negativos si es el día
  * anterior, más de 1440 si es el siguiente. Sirve para comparar con la hora elegida. */
 export function minutosDesde(dia: string, iso: string): number {
@@ -134,15 +184,21 @@ function mensajeDe(error: unknown): string {
   return error instanceof ErrorApi ? error.message : "Error inesperado";
 }
 
-export default function Agenda() {
-  const { caducada } = useSesion();
+/** La agenda de la clínica (admin y recepción, /agenda) o, con `propia`, «Mi agenda» del
+ * profesional (/mi-agenda, T20): solo sus citas, que filtra la API, y sin botones. */
+export default function Agenda({ propia = false }: { propia?: boolean }) {
+  const { estado, caducada } = useSesion();
   const [parametros, setParametros] = useSearchParams();
   const fecha = parametros.get("fecha");
   const dia = diaValido(fecha) ? fecha : hoyEnLaClinica();
-  const persona = parametros.get("persona") ?? ""; // "": todas
-  const nueva = parametros.get("nueva") === "1";
+  const vista = parametros.get("vista") === "mes" ? "mes" : "dia";
+  const primero = primeroDeMes(dia);
+  // Lo que se pide a la API: el día o, en la vista del mes, el mes (moverse dentro de él no recarga).
+  const periodo = vista === "mes" ? primero : dia;
+  const persona = propia ? "" : (parametros.get("persona") ?? ""); // "": todas
+  const nueva = !propia && parametros.get("nueva") === "1";
   const contactoInicial = Number(parametros.get("contacto")) || null;
-  const reprogramar = Number(parametros.get("reprogramar")) || null;
+  const reprogramar = propia ? null : Number(parametros.get("reprogramar")) || null;
   const [lista, setLista] = useState<EstadoLista>({ tipo: "cargando" });
   const [recarga, setRecarga] = useState(0);
   const [personas, setPersonas] = useState<PersonaServicio[]>([]);
@@ -165,7 +221,10 @@ export default function Agenda() {
   useEffect(() => {
     let vigente = true;
     setLista({ tipo: "cargando" });
-    listarCitas(dia, persona ? { persona: Number(persona) } : {})
+    const filtros = persona ? { persona: Number(persona) } : {};
+    // El mes entero de una vez (T20): de su día 1 al último.
+    const peticion = vista === "mes" ? listarCitasEntre(primero, ultimoDeMes(primero), filtros) : listarCitas(dia, filtros);
+    peticion
       .then((citas) => vigente && setLista({ tipo: "ok", citas }))
       .catch((error: unknown) => {
         if (!vigente) return;
@@ -175,20 +234,25 @@ export default function Agenda() {
     return () => {
       vigente = false;
     };
-  }, [dia, persona, recarga, caducada]);
+  }, [periodo, vista, persona, recarga, caducada]);
 
   useEffect(() => {
-    // Para el filtro: las cuentas internas activas (las que pueden realizar citas).
+    // Para el filtro: las cuentas internas activas (las que pueden realizar citas). El profesional
+    // no tiene filtro: ve solo las suyas.
+    if (propia) return;
     listarPersonasAsignables()
       .then(setPersonas)
       .catch(() => setPersonas([])); // sin la lista, el filtro solo ofrece «Todas»
-  }, []);
+  }, [propia]);
 
   useEffect(() => {
     if (lista.tipo !== "ok" || reprogramar === null) return;
     const encontrada = lista.citas.find((c) => c.id === reprogramar);
     if (encontrada) setEnEdicion(encontrada);
   }, [lista, reprogramar]);
+
+  if (estado.tipo !== "dentro") return null;
+  const yo = String(estado.usuario.id);
 
   function alGuardar(diaDeLaCita: string, texto: string) {
     setCreada(texto);
@@ -203,9 +267,75 @@ export default function Agenda() {
 
   const editada = enEdicion && enEdicion.id === reprogramar ? enEdicion : null;
 
+  /** Una cita de la lista; `diaDeLaFila` es el día bajo el que sale (para escribir sus horas). */
+  function fila(c: CitaAgenda, diaDeLaFila: string) {
+    return (
+      <li key={c.id} className={c.status === "cancelled" ? "cita cita--cancelada" : "cita"}>
+        <span className="cita__hora">{tramo(diaDeLaFila, c)}</span>
+        <Link className="cita__contacto" to={`/contactos/${c.contact_id}`}>
+          {c.contact_name}
+        </Link>
+        <span className="cita__meta">
+          {c.service_name}
+          {!propia && ` · ${c.staff_email}`}
+          {c.status !== "scheduled" && ` · ${estadoDe(c)}`}
+        </span>
+        {!propia && sePuedeCambiar(c) && cancelando !== c.id && (
+          <span className="cita__acciones">
+            <button
+              type="button"
+              className="secundario"
+              aria-label={`Reprogramar: ${c.contact_name}, ${tramo(diaDeLaFila, c)}`}
+              onClick={() => {
+                limpiarMensajes();
+                setCancelando(null);
+                setEnEdicion(c);
+                cambiar({ reprogramar: String(c.id), nueva: null, contacto: null });
+              }}
+            >
+              Reprogramar
+            </button>
+            <button
+              type="button"
+              className="secundario"
+              aria-label={`Cancelar la cita: ${c.contact_name}, ${tramo(diaDeLaFila, c)}`}
+              onClick={() => {
+                limpiarMensajes();
+                setCancelando(c.id);
+              }}
+            >
+              Cancelar cita
+            </button>
+          </span>
+        )}
+        {!propia && sePuedeCambiar(c) && cancelando === c.id && (
+          <FormularioCancelar
+            cita={c}
+            dia={diaDeLaFila}
+            alTerminar={(texto) => {
+              setCancelando(null);
+              setCreada(texto);
+              setRecarga((n) => n + 1);
+            }}
+            alConflicto={(texto) => {
+              // Otra persona la cambió: se cierra, se avisa y la lista trae la versión nueva.
+              setCancelando(null);
+              setAviso(texto);
+              setRecarga((n) => n + 1);
+            }}
+            alVolver={() => setCancelando(null)}
+          />
+        )}
+      </li>
+    );
+  }
+
+  const titulo = propia ? "Mi agenda" : "Agenda";
+  const vacia = vista === "mes" ? "este mes" : "este día";
+
   return (
     <section className="tarjeta" aria-labelledby="titulo-agenda">
-      <h2 id="titulo-agenda">Agenda</h2>
+      <h2 id="titulo-agenda">{titulo}</h2>
 
       {creada && (
         <p className="exito" role="status">
@@ -218,7 +348,7 @@ export default function Agenda() {
         </p>
       )}
 
-      {editada && sePuedeCambiar(editada) ? (
+      {propia ? null : editada && sePuedeCambiar(editada) ? (
         <FormularioCita
           key={editada.id}
           diaInicial={dia}
@@ -256,37 +386,71 @@ export default function Agenda() {
         </>
       )}
 
-      <div className="dia">
-        <button type="button" className="secundario" onClick={() => cambiar({ fecha: sumarDias(dia, -1) })}>
-          ← Día anterior
-        </button>
-        <label>
+      <div className="vistas" role="group" aria-label="Vista">
+        <button type="button" className="secundario" aria-pressed={vista === "dia"} onClick={() => cambiar({ vista: null })}>
           Día
-          <input type="date" value={dia} onChange={(e) => diaValido(e.target.value) && cambiar({ fecha: e.target.value })} />
-        </label>
-        <button type="button" className="secundario" onClick={() => cambiar({ fecha: sumarDias(dia, 1) })}>
-          Día siguiente →
         </button>
-        <button type="button" className="secundario" onClick={() => cambiar({ fecha: null })} disabled={dia === hoyEnLaClinica()}>
-          Hoy
+        <button type="button" className="secundario" aria-pressed={vista === "mes"} onClick={() => cambiar({ vista: "mes" })}>
+          Mes
         </button>
-      </div>
-      <div className="filtros">
-        <label>
-          Persona
-          <select value={persona} onChange={(e) => cambiar({ persona: e.target.value })}>
-            <option value="">Todas</option>
-            {personas.map((p) => (
-              <option key={p.id} value={String(p.id)}>
-                {p.email}
-              </option>
-            ))}
-          </select>
-        </label>
       </div>
 
+      {vista === "dia" ? (
+        <div className="dia">
+          <button type="button" className="secundario" onClick={() => cambiar({ fecha: sumarDias(dia, -1) })}>
+            ← Día anterior
+          </button>
+          <label>
+            Día
+            <input type="date" value={dia} onChange={(e) => diaValido(e.target.value) && cambiar({ fecha: e.target.value })} />
+          </label>
+          <button type="button" className="secundario" onClick={() => cambiar({ fecha: sumarDias(dia, 1) })}>
+            Día siguiente →
+          </button>
+          <button type="button" className="secundario" onClick={() => cambiar({ fecha: null })} disabled={dia === hoyEnLaClinica()}>
+            Hoy
+          </button>
+        </div>
+      ) : (
+        <div className="dia dia--mes">
+          <button type="button" className="secundario" onClick={() => cambiar({ fecha: sumarMeses(primero, -1) })}>
+            ← Mes anterior
+          </button>
+          <button type="button" className="secundario" onClick={() => cambiar({ fecha: sumarMeses(primero, 1) })}>
+            Mes siguiente →
+          </button>
+          <button
+            type="button"
+            className="secundario"
+            onClick={() => cambiar({ fecha: null })}
+            disabled={primero === primeroDeMes(hoyEnLaClinica())}
+          >
+            Este mes
+          </button>
+        </div>
+      )}
+      {!propia && (
+        <div className="filtros">
+          <label>
+            Persona
+            <select value={persona} onChange={(e) => cambiar({ persona: e.target.value })}>
+              <option value="">Todas</option>
+              {personas.map((p) => (
+                <option key={p.id} value={String(p.id)}>
+                  {p.email}
+                </option>
+              ))}
+            </select>
+          </label>
+          {/* Para quien también realiza servicios (T20): el filtro con su propia cuenta. */}
+          <button type="button" className="secundario" onClick={() => cambiar({ persona: yo })} disabled={persona === yo}>
+            Solo mis citas
+          </button>
+        </div>
+      )}
+
       <h3 className="dia__titulo">
-        {formatoDia(dia)} <span className="ayuda">(hora de Nueva York)</span>
+        {vista === "mes" ? formatoMes(primero) : formatoDia(dia)} <span className="ayuda">(hora de Nueva York)</span>
       </h3>
       {lista.tipo === "cargando" && <p>Cargando la agenda…</p>}
       {lista.tipo === "error" && (
@@ -300,71 +464,40 @@ export default function Agenda() {
         </>
       )}
       {lista.tipo === "ok" && lista.citas.length === 0 && (
-        <p>{persona ? "Esta persona no tiene citas este día." : "No hay citas este día."}</p>
+        <p>{propia ? `No tienes citas ${vacia}.` : persona ? `Esta persona no tiene citas ${vacia}.` : `No hay citas ${vacia}.`}</p>
       )}
-      {lista.tipo === "ok" && lista.citas.length > 0 && (
-        <ul className="citas">
-          {lista.citas.map((c) => (
-            <li key={c.id} className={c.status === "cancelled" ? "cita cita--cancelada" : "cita"}>
-              <span className="cita__hora">{tramo(dia, c)}</span>
-              <Link className="cita__contacto" to={`/contactos/${c.contact_id}`}>
-                {c.contact_name}
-              </Link>
-              <span className="cita__meta">
-                {c.service_name} · {c.staff_email}
-                {c.status !== "scheduled" && ` · ${estadoDe(c)}`}
-              </span>
-              {sePuedeCambiar(c) && cancelando !== c.id && (
-                <span className="cita__acciones">
-                  <button
-                    type="button"
-                    className="secundario"
-                    aria-label={`Reprogramar: ${c.contact_name}, ${tramo(dia, c)}`}
-                    onClick={() => {
-                      limpiarMensajes();
-                      setCancelando(null);
-                      setEnEdicion(c);
-                      cambiar({ reprogramar: String(c.id), nueva: null, contacto: null });
-                    }}
-                  >
-                    Reprogramar
-                  </button>
-                  <button
-                    type="button"
-                    className="secundario"
-                    aria-label={`Cancelar la cita: ${c.contact_name}, ${tramo(dia, c)}`}
-                    onClick={() => {
-                      limpiarMensajes();
-                      setCancelando(c.id);
-                    }}
-                  >
-                    Cancelar cita
-                  </button>
-                </span>
-              )}
-              {sePuedeCambiar(c) && cancelando === c.id && (
-                <FormularioCancelar
-                  cita={c}
-                  dia={dia}
-                  alTerminar={(texto) => {
-                    setCancelando(null);
-                    setCreada(texto);
-                    setRecarga((n) => n + 1);
-                  }}
-                  alConflicto={(texto) => {
-                    // Otra persona la cambió: se cierra, se avisa y la lista trae la versión nueva.
-                    setCancelando(null);
-                    setAviso(texto);
-                    setRecarga((n) => n + 1);
-                  }}
-                  alVolver={() => setCancelando(null)}
-                />
-              )}
-            </li>
+      {lista.tipo === "ok" && lista.citas.length > 0 && vista === "dia" && (
+        <ul className="citas">{lista.citas.map((c) => fila(c, dia))}</ul>
+      )}
+      {lista.tipo === "ok" && lista.citas.length > 0 && vista === "mes" && (
+        <>
+          <Resumen citas={lista.citas} />
+          {porDia(lista.citas, primero).map(([diaDelGrupo, citas]) => (
+            <div key={diaDelGrupo} className="mes__dia">
+              <h4>
+                {formatoDia(diaDelGrupo)}{" "}
+                <button type="button" className="enlace" onClick={() => cambiar({ vista: null, fecha: diaDelGrupo })}>
+                  Ver el día
+                </button>
+              </h4>
+              <ul className="citas">{citas.map((c) => fila(c, diaDelGrupo))}</ul>
+            </div>
           ))}
-        </ul>
+        </>
       )}
     </section>
+  );
+}
+
+/** Cuántas citas Programadas hay de cada servicio en el periodo (T20): para preparar el material.
+ * Las canceladas no gastan material y no cuentan. */
+function Resumen({ citas }: { citas: CitaAgenda[] }) {
+  const resumen = resumenPorServicio(citas);
+  if (resumen.length === 0) return <p className="resumen">No hay ninguna cita Programada este mes.</p>;
+  return (
+    <p className="resumen">
+      <strong>Programadas este mes:</strong> {resumen.map(({ servicio, total }) => `${servicio}: ${total}`).join(" · ")}
+    </p>
   );
 }
 

@@ -90,7 +90,7 @@ function Cabecera() {
           {error}
         </p>
       )}
-      {/* Con una sola sección (profesional, cliente) la barra no aporta nada. */}
+      {/* Con una sola sección (el cliente, de momento) la barra no aporta nada. */}
       {secciones.length > 1 && (
         <nav className="secciones" aria-label="Secciones">
           {secciones.map((s) => (
@@ -168,7 +168,7 @@ export function Usuarios() {
   );
 }
 
-/** Áreas de profesional y cliente: de momento, solo la bienvenida. */
+/** Área del cliente: de momento, solo la bienvenida (el portal llega en T21-T23). */
 export function Bienvenida() {
   const { estado } = useSesion();
   if (estado.tipo !== "dentro") return null;

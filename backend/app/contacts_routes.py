@@ -1,8 +1,8 @@
 """Contactos: alta (T11), lista con búsqueda (T12), ficha con edición (T13) y estado
 comercial con responsable (T14), para administración y recepción.
 
-El profesional verá solo los contactos con alguna cita con él cuando existan las citas;
-hasta entonces recibe 403, igual que el cliente.
+El profesional (T20) solo abre, en solo lectura, la ficha de un contacto con alguna cita con él;
+la lista, el alta y los cambios le dan 403, igual que al cliente.
 """
 
 import logging
@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from app.auth import require_csrf, require_roles
 from app.db import get_db
 from app.errors import field_error, user_message
-from app.models import Contact, ContactSource, ContactStatus, Role, User
+from app.models import Appointment, Contact, ContactSource, ContactStatus, Role, User
 from app.validators import normalize_contact_email, normalize_name, normalize_phone
 
 logger = logging.getLogger(__name__)
@@ -285,13 +285,25 @@ def create_contact(
 @router.get("/{contact_id}", responses={404: {"description": "Contacto no encontrado"}})
 def get_contact(
     contact_id: int,
-    _user: User = Depends(require_roles(Role.ADMIN, Role.RECEPTION)),
+    user: User = Depends(require_roles(Role.ADMIN, Role.RECEPTION, Role.PROFESSIONAL)),
     db: Session = Depends(get_db),
 ) -> ContactDetail:
+    """La ficha. El profesional (T20) solo la de un contacto con alguna cita con él, pasada o
+    futura, también cancelada; si no, 404 como si no existiera: no se revela que existe."""
     contact = db.get(Contact, contact_id)
-    if contact is None:
+    if contact is None or (user.role == Role.PROFESSIONAL and not _has_appointment_with(db, contact_id, user.id)):
         raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND_MESSAGE)
     return _detail(db, contact)
+
+
+def _has_appointment_with(db: Session, contact_id: int, staff_id: int) -> bool:
+    return db.scalar(
+        select(
+            select(Appointment.id)
+            .where(Appointment.contact_id == contact_id, Appointment.staff_id == staff_id)
+            .exists()
+        )
+    )
 
 
 @router.put(

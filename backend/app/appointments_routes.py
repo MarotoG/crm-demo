@@ -1,8 +1,8 @@
 """Citas (T16): crear una cita para un contacto, un servicio y una de las personas que lo realizan.
-La agenda de un día (T18), con filtros por persona y contacto.
+La agenda de un día (T18) o de un mes (T20), con filtros por persona y contacto.
 
-Las crean administración y recepción; el profesional y el cliente reciben 403 (consultarán las
-suyas más adelante). La hora se escribe en la hora local de la clínica, sin zona (decisión T16), y
+Las crean administración y recepción; el profesional y el cliente reciben 403. El profesional
+consulta solo las suyas (T20); el cliente, más adelante en el portal. La hora se escribe en la hora local de la clínica, sin zona (decisión T16), y
 la API la convierte a un instante. La duración se copia del servicio.
 
 Solapamientos (T17): la misma persona no puede tener dos citas que se pisen (409). Lo decide una
@@ -76,6 +76,12 @@ ALREADY_STARTED_MESSAGE = "La cita ya ha empezado: no se puede cambiar"
 CONTACT_LOST_RESCHEDULE_MESSAGE = "El contacto está «Perdido»: reábrelo antes de cambiar la cita, o cancélala"
 SERVICE_INACTIVE_RESCHEDULE_MESSAGE = "El servicio está desactivado: cancela la cita y da otra"
 CANCEL_REASON_MESSAGE = "Elige el motivo de la cancelación"
+# Agenda de un intervalo (T20): un mes como mucho, para la vista mensual.
+MAX_RANGE_DAYS = 31
+RANGE_MISSING_MESSAGE = "Indica un día (date) o un intervalo (from y to)"
+RANGE_ORDER_MESSAGE = "El último día no puede ser anterior al primero"
+RANGE_TOO_LONG_MESSAGE = f"El intervalo no puede pasar de {MAX_RANGE_DAYS} días"
+OWN_AGENDA_MESSAGE = "Solo puedes ver tus citas"
 STATUS_NAMES = {
     AppointmentStatus.COMPLETED: "Realizada",
     AppointmentStatus.NO_SHOW: "No presentado",
@@ -162,12 +168,21 @@ class AgendaItem(AppointmentOut):
     staff_email: str
 
 
-def _day_bounds(day: date, zone: ZoneInfo) -> tuple[datetime, datetime]:
-    """Un día de la clínica como instantes [00:00, 00:00 del día siguiente). Con cambio de horario
-    dura 23 o 25 horas: por eso se calcula cada medianoche en la zona y no se suman 24 h."""
-    start = datetime.combine(day, time(0), tzinfo=zone)
-    end = datetime.combine(day + timedelta(days=1), time(0), tzinfo=zone)
+def _days_bounds(first: date, last: date, zone: ZoneInfo) -> tuple[datetime, datetime]:
+    """Los días de la clínica de `first` a `last` (incluido) como instantes [00:00 de `first`, 00:00
+    del día siguiente a `last`). Un día con cambio de horario dura 23 o 25 horas: por eso se
+    calcula cada medianoche en la zona y no se suman 24 h."""
+    start = datetime.combine(first, time(0), tzinfo=zone)
+    end = datetime.combine(last + timedelta(days=1), time(0), tzinfo=zone)
     return start.astimezone(UTC), end.astimezone(UTC)
+
+
+def _query_error(param: str, message: str) -> HTTPException:
+    """422 con la forma de los de Pydantic, en un parámetro de la dirección."""
+    return HTTPException(
+        status.HTTP_422_UNPROCESSABLE_CONTENT,
+        [{"type": "dato_no_valido", "loc": ["query", param], "msg": message}],
+    )
 
 
 def _clock(moment: datetime) -> str:
@@ -221,21 +236,38 @@ def get_now() -> datetime:
     return datetime.now(UTC)
 
 
-@router.get("")
+@router.get("", responses={403: {"description": "El profesional solo ve sus citas"}})
 def list_appointments(
-    day: Annotated[date, Query(alias="date", description="Día en la hora de la clínica: AAAA-MM-DD")],
+    day: Annotated[date | None, Query(alias="date", description="Día en la hora de la clínica: AAAA-MM-DD")] = None,
+    first: Annotated[date | None, Query(alias="from", description="Primer día del intervalo (con `to`)")] = None,
+    last: Annotated[date | None, Query(alias="to", description="Último día del intervalo, incluido")] = None,
     staff_id: int | None = None,
     contact_id: int | None = None,
-    _user: User = Depends(require_roles(Role.ADMIN, Role.RECEPTION)),
+    user: User = Depends(require_roles(Role.ADMIN, Role.RECEPTION, Role.PROFESSIONAL)),
     db: Session = Depends(get_db),
 ) -> list[AgendaItem]:
-    """Agenda de un día (T18), por hora de inicio; filtros opcionales por persona y por contacto.
+    """Agenda de un día (T18) o de un intervalo de hasta 31 días (T20, la vista del mes), por hora
+    de inicio; filtros opcionales por persona y por contacto.
 
-    Incluye las citas que ocupan parte del día aunque empiecen el anterior (23:30-0:30). El
-    profesional verá la suya en T20; hasta entonces, 403 como el cliente.
+    Incluye las citas que ocupan parte del periodo aunque empiecen antes (23:30-0:30). El
+    profesional (T20) solo ve las suyas: el filtro por persona lo pone la API, no el navegador, y
+    pedir las de otra persona es 403. El cliente, 403 (verá las suyas en el portal).
     """
+    if day is not None and first is None and last is None:
+        first = last = day
+    elif day is not None or first is None or last is None:
+        raise _query_error("date", RANGE_MISSING_MESSAGE)
+    elif last < first:
+        raise _query_error("to", RANGE_ORDER_MESSAGE)
+    elif (last - first).days >= MAX_RANGE_DAYS:
+        raise _query_error("to", RANGE_TOO_LONG_MESSAGE)
+    if user.role == Role.PROFESSIONAL:
+        if staff_id is not None and staff_id != user.id:
+            logger.warning("Agenda ajena denegada: user_id=%s pidió staff_id=%s", user.id, staff_id)
+            raise HTTPException(status.HTTP_403_FORBIDDEN, OWN_AGENDA_MESSAGE)
+        staff_id = user.id
     zone = get_settings().clinic_zone
-    start, end = _day_bounds(day, zone)
+    start, end = _days_bounds(first, last, zone)
     query = (
         select(Appointment, Contact.first_name, Contact.last_name, Service.name, User.email)
         .join(Contact, Contact.id == Appointment.contact_id)

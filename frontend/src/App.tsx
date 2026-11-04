@@ -1,4 +1,5 @@
-// Rutas de la app (T10; fichas de contacto en T13; servicios en T15). Desde T18 cada sección tiene
+// Rutas de la app (T10; fichas de contacto en T13; servicios en T15; área del profesional en T20,
+// con «Mi agenda», que es la agenda en solo lectura con sus citas). Desde T18 cada sección tiene
 // una dirección neutra (/agenda, /contactos…), la misma para todos los roles que la ven: quién la
 // ve lo decide permisos.ts. El router (BrowserRouter en main.tsx, MemoryRouter en las pruebas) lo
 // pone quien monta App.
@@ -22,12 +23,14 @@ export default function App() {
         <Route element={<RutaProtegida />}>
           <Route path="/agenda" element={<ConPermiso seccion="agenda"><Agenda /></ConPermiso>} />
           <Route path="/contactos" element={<ConPermiso seccion="contactos"><Contactos /></ConPermiso>} />
-          <Route path="/contactos/:id" element={<ConPermiso seccion="contactos"><FichaContacto /></ConPermiso>} />
+          <Route path="/contactos/:id" element={<ConPermiso seccion="ficha"><FichaContacto /></ConPermiso>} />
           <Route path="/servicios" element={<ConPermiso seccion="servicios"><Servicios /></ConPermiso>} />
           <Route path="/usuarios" element={<ConPermiso seccion="usuarios"><Usuarios /></ConPermiso>} />
-          <Route path="/profesional" element={<ConPermiso seccion="profesional"><Bienvenida /><MisServicios /></ConPermiso>} />
+          <Route path="/mi-agenda" element={<ConPermiso seccion="miAgenda"><Agenda propia /></ConPermiso>} />
+          <Route path="/mis-servicios" element={<ConPermiso seccion="misServicios"><MisServicios /></ConPermiso>} />
           <Route path="/portal" element={<ConPermiso seccion="portal"><Bienvenida /></ConPermiso>} />
-          {/* Direcciones de antes de T18: llevan a la nueva para no romper enlaces guardados. */}
+          {/* Direcciones antiguas (antes de T18; /profesional, antes de T20): llevan a la nueva para no romper enlaces guardados. */}
+          <Route path="/profesional" element={<Inicio />} />
           <Route path="/admin" element={<Inicio />} />
           <Route path="/recepcion" element={<Inicio />} />
           <Route path="/admin/contactos/:id" element={<RedirigirFicha />} />

@@ -425,6 +425,60 @@ select:focus-visible {
   text-transform: uppercase;
 }
 
+/* Vista del día o del mes (T20): dos botones; el elegido, relleno. */
+.vistas {
+  display: flex;
+  gap: 0.5rem;
+  margin: 1rem 0 0;
+}
+
+.vistas button {
+  flex: 1 1 0;
+}
+
+button.secundario[aria-pressed="true"] {
+  background: #334e68;
+  color: #fff;
+}
+
+/* En el mes no hay campo de día: «Este mes» a lo ancho en móvil. */
+.dia--mes button:last-child {
+  grid-column: 1 / -1;
+}
+
+.filtros button {
+  align-self: flex-end;
+}
+
+/* Un botón con aspecto de enlace («Ver el día»). */
+button.enlace {
+  width: auto;
+  padding: 0;
+  border: none;
+  background: none;
+  color: #334e68;
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 400;
+  text-decoration: underline;
+}
+
+.resumen {
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.375rem;
+  background: #f0f4f8;
+}
+
+.mes__dia h4 {
+  margin: 1rem 0 0.25rem;
+  font-size: 0.95rem;
+}
+
+.mes__dia h4::first-letter {
+  text-transform: uppercase;
+}
+
 .citas {
   list-style: none;
   margin: 0;
@@ -539,6 +593,19 @@ select:focus-visible {
   .dia label {
     grid-column: auto;
     order: 0;
+  }
+
+  .dia--mes {
+    grid-template-columns: auto auto auto;
+    justify-content: start;
+  }
+
+  .dia--mes button:last-child {
+    grid-column: auto;
+  }
+
+  .vistas button {
+    flex: none;
   }
 
   .cita {

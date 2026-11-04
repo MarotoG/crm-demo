@@ -374,11 +374,12 @@ def test_recepcion_y_admin_ven_la_ficha(usuarios, db, role):
     }
 
 
-@pytest.mark.parametrize("role", [Role.PROFESSIONAL, Role.CLIENT])
-def test_profesional_y_cliente_no_ven_ni_editan_la_ficha(usuarios, db, role):
+@pytest.mark.parametrize("role, visto", [(Role.PROFESSIONAL, 404), (Role.CLIENT, 403)])
+def test_profesional_y_cliente_no_ven_ni_editan_la_ficha(usuarios, db, role, visto):
     contacto_id = crear(ANA).json()["id"]
 
-    assert ver(contacto_id, role).status_code == 403
+    # El profesional sin citas con el contacto: 404, como si no existiera (T20; con cita, en test_appointments).
+    assert ver(contacto_id, role).status_code == visto
     assert editar(contacto_id, ficha_de_ana(first_name="Eva"), role).status_code == 403
     assert db.get(Contact, contacto_id).first_name == "Ana"
 

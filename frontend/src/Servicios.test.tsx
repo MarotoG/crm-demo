@@ -320,7 +320,7 @@ describe("profesional", () => {
   it("ve sus servicios, sin gestión ni personas asignables", async () => {
     usuario = PROFESIONAL;
     rutas["GET /api/services"] = () => ({ status: 200, cuerpo: [BOTOX] });
-    abrir("/profesional");
+    abrir("/mis-servicios");
 
     const s = within((await screen.findByRole("heading", { name: "Mis servicios" })).closest("section") as HTMLElement);
     expect(await s.findByText("Botox")).toBeTruthy();
@@ -332,7 +332,7 @@ describe("profesional", () => {
   it("sin servicios asignados, lo dice", async () => {
     usuario = PROFESIONAL;
     rutas["GET /api/services"] = () => ({ status: 200, cuerpo: [] });
-    abrir("/profesional");
+    abrir("/mis-servicios");
 
     expect(await screen.findByText("Todavía no tienes servicios asignados. Pídelo en recepción o administración.")).toBeTruthy();
   });

@@ -115,12 +115,33 @@ describe("ver la ficha", () => {
     expect(llamadas.some((l) => l.ruta === "/api/contacts/7")).toBe(true);
   });
 
-  it.each(["professional", "client"] as const)("una cuenta %s no ve la ficha ni la pide", async (role) => {
-    usuario = { ...RECEPCION, role };
+  it("una cuenta de cliente no ve la ficha ni la pide", async () => {
+    usuario = { ...RECEPCION, role: "client" };
     abrir("/contactos/7");
 
     expect(await screen.findByText("No tienes acceso a esta área")).toBeTruthy();
     expect(llamadas.some((l) => l.ruta === "/api/contacts/7")).toBe(false);
+  });
+
+  it("el profesional la ve en solo lectura, sin editar, cambiar el estado ni dar cita (T20)", async () => {
+    usuario = { ...RECEPCION, role: "professional" };
+    abrir("/contactos/7");
+
+    expect(await screen.findByRole("heading", { name: "Ana Smith" })).toBeTruthy();
+    expect(dato("Teléfono")).toBe("(212) 555-0123");
+    expect(dato("Estado")).toBe("Nuevo");
+    expect(screen.queryAllByRole("button")).toEqual([screen.getByRole("button", { name: "Cerrar sesión" })]);
+    expect(screen.getByRole("link", { name: "← Volver a mi agenda" }).getAttribute("href")).toBe("/mi-agenda");
+    expect(screen.queryByText(/Al darle una cita/)).toBeNull();
+    // No pide la lista de responsables (403 para él).
+    expect(llamadas.some((l) => l.ruta === "/api/contacts/owners")).toBe(false);
+  });
+
+  it("al profesional, un contacto sin citas con él (404) no le dice si existe", async () => {
+    usuario = { ...RECEPCION, role: "professional" };
+    abrir("/contactos/8");
+
+    expect(await screen.findByRole("heading", { name: "Este contacto no existe o no tiene citas contigo" })).toBeTruthy();
   });
 
   it("un contacto que no existe (404) lo dice", async () => {
