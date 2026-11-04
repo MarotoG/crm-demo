@@ -72,6 +72,7 @@ beforeEach(() => {
     "GET /api/contacts/7": () => ({ status: 200, cuerpo: ANA }),
     "GET /api/contacts/7/portal": () => ({ status: 200, cuerpo: SIN_INVITACION }),
     "GET /api/appointments/by-contact/7": () => ({ status: 200, cuerpo: { total: 0, items: [] } }),
+    "GET /api/contacts/7/follow-ups": () => ({ status: 200, cuerpo: { total: 0, items: [] } }),
     "POST /api/contacts/7/portal-invitation": () => ({ status: 201, cuerpo: { token: "token-secreto", expires_at: CADUCA } }),
     "POST /api/portal-invitations/check": () => ({ status: 200, cuerpo: { email: "ana@clinica.example.com" } }),
     "POST /api/portal-invitations/accept": () => ({ status: 204 }),

@@ -308,12 +308,12 @@ def get_contact(
     """La ficha. El profesional (T20) solo la de un contacto con alguna cita con él, pasada o
     futura, también cancelada; si no, 404 como si no existiera: no se revela que existe."""
     contact = db.get(Contact, contact_id)
-    if contact is None or (user.role == Role.PROFESSIONAL and not _has_appointment_with(db, contact_id, user.id)):
+    if contact is None or (user.role == Role.PROFESSIONAL and not has_appointment_with(db, contact_id, user.id)):
         raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND_MESSAGE)
     return _detail(db, contact)
 
 
-def _has_appointment_with(db: Session, contact_id: int, staff_id: int) -> bool:
+def has_appointment_with(db: Session, contact_id: int, staff_id: int) -> bool:
     return db.scalar(
         select(
             select(Appointment.id)

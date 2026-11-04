@@ -403,6 +403,35 @@ export function listarCitasDeContacto(contacto: number): Promise<{ total: number
   return peticion(`/api/appointments/by-contact/${contacto}`);
 }
 
+// --- Tareas de seguimiento (T24) -------------------------------------------------
+
+export type TareaSeguimiento = {
+  id: number;
+  contact_id: number;
+  description: string;
+  due_on: string; // día de la clínica, AAAA-MM-DD
+  assigned_to_id: number;
+  assigned_to_email: string;
+  created_by_email: string | null;
+  created_at: string;
+};
+
+export type NuevaTarea = { description: string; due_on: string; assigned_to_id: number };
+
+/** Las 20 de fecha más cercana y el total. El profesional, solo las suyas. */
+export function listarTareas(contacto: number): Promise<{ total: number; items: TareaSeguimiento[] }> {
+  return peticion(`/api/contacts/${contacto}/follow-ups`);
+}
+
+/** A quién se puede asignar: administración, recepción y los profesionales con cita con el contacto. */
+export function listarAsignables(contacto: number): Promise<Responsable[]> {
+  return peticion<Responsable[]>(`/api/contacts/${contacto}/follow-up-assignees`);
+}
+
+export function crearTarea(contacto: number, datos: NuevaTarea, csrf: string): Promise<TareaSeguimiento> {
+  return peticion(`/api/contacts/${contacto}/follow-ups`, { method: "POST", cuerpo: datos, csrf });
+}
+
 // --- Portal del cliente (T22) ----------------------------------------------------
 
 /** Lo que el cliente sabe de una cita: sin notas, motivo ni quién la realiza. */

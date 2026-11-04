@@ -55,6 +55,8 @@ beforeEach(() => {
     // Citas e invitación (T21) tienen sus pruebas en Invitacion.test.tsx; aquí, sin botones de más.
     "GET /api/appointments/by-contact/7": () => ({ status: 200, cuerpo: { total: 0, items: [] } }),
     "GET /api/contacts/7/portal": () => ({ status: 200, cuerpo: { has_account: true, invitation_expires_at: null } }),
+    // Tareas de seguimiento (T24): sus pruebas, en Seguimientos.test.tsx.
+    "GET /api/contacts/7/follow-ups": () => ({ status: 200, cuerpo: { total: 0, items: [] } }),
   };
   vi.stubGlobal(
     "fetch",
@@ -332,7 +334,7 @@ describe("estado comercial y responsable (T14)", () => {
     screen
       .getAllByRole("button")
       .map((b) => b.textContent)
-      .filter((t) => t !== "Cerrar sesión");
+      .filter((t) => t !== "Cerrar sesión" && t !== "Nueva tarea"); // esta no depende del estado
 
   it("muestra el responsable, o «Sin responsable»", async () => {
     abrir("/contactos/7");

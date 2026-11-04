@@ -11,7 +11,7 @@ sin reglas aparte, los invisibles, los de control y las letras que imitan a otra
 """
 
 import re
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
 MAX_EMAIL_LENGTH = 254
@@ -205,3 +205,28 @@ MAX_NOTE_LENGTH = MAX_CANCEL_NOTE_LENGTH
 def normalize_note(value: str) -> str | None:
     """Nota opcional, con la misma forma que el detalle de una cancelación; vacía → sin nota."""
     return _short_line(value, "La nota")
+
+
+# --- Tareas de seguimiento (T24) -----------------------------------------------------
+
+MAX_FOLLOW_UP_LENGTH = MAX_CANCEL_NOTE_LENGTH
+_DUE_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+DUE_DATE_FORMAT_MESSAGE = "Indica la fecha como AAAA-MM-DD"
+
+
+def normalize_follow_up_description(value: str) -> str:
+    """Qué hay que hacer: obligatorio, con la misma forma que una nota."""
+    description = _short_line(value, "La descripción")
+    if description is None:
+        raise ValueError("Escribe qué hay que hacer")
+    return description
+
+
+def parse_due_date(value: str) -> date:
+    """«2027-01-11» → fecha. Es un día de la clínica, sin hora ni zona (decisión T24)."""
+    if not _DUE_DATE.fullmatch(value):
+        raise ValueError(DUE_DATE_FORMAT_MESSAGE)
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        raise ValueError("Esa fecha no existe") from None

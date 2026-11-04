@@ -90,7 +90,7 @@ Provisionar cuentas de demo mediante un procedimiento reproducible. El vínculo 
 | contacts | id, nombre, email obligatorio y único, teléfono opcional y único, nota corta, origen, estado comercial, responsable, fechas; sin alergias, DOB ni historia clínica en el núcleo |
 | services | id, nombre, duración positiva, activo |
 | appointments | id, contact_id, professional_id, service_id, start_at, end_at, status, nota corta, created_by, fechas de actualización |
-| follow_up_tasks | id, contact_id, appointment_id opcional, assigned_to, due_at, estado y texto administrativo limitado |
+| follow_up_tasks | id, contact_id, assigned_to, due_on (fecha, sin hora), texto administrativo limitado, created_by, created_at; sin enlace a una cita (decisión T24); el estado llega con T25 |
 | audit_events | actor, acción, tipo/id objetivo, instante y resultado necesario; sin credenciales ni contenido sensible completo |
 
 Un lead y un cliente son estados/relaciones del mismo contacto, no dos fichas duplicadas. La regla exacta de conversión se acuerda; no crear un paciente clínico automáticamente por cualquier visita al widget. Cada contacto puede tener muchas citas/seguimientos; una cuenta de cliente solo está vinculada a su contacto.
@@ -107,7 +107,7 @@ Evitar solapamientos por profesional usando intervalos semiabiertos `[inicio, fi
 
 Una consulta previa de disponibilidad no basta ante dos peticiones simultáneas. Usar una transacción y una restricción de exclusión de PostgreSQL, o una alternativa equivalente justificada y probada. Traducir el conflicto a una respuesta comprensible (por ejemplo 409). Prueba: dos reservas concurrentes para el mismo profesional y franja no pueden quedar ambas guardadas. Salas y bloqueo por recursos se añaden después del TFM.
 
-Seguimiento MVP: crear tarea manual ligada al contacto/cita, asignarla y verla por vencimiento. Notificación inicial significa indicador/listado dentro del sistema, no una promesa de push cuando está cerrado. Posteriormente añadir canales, consentimiento/preferencias, programación fiable, reintentos y prevención de duplicados.
+Seguimiento MVP: crear tarea manual ligada al contacto (decisión T24, sección 14), asignarla y verla por vencimiento. Notificación inicial significa indicador/listado dentro del sistema, no una promesa de push cuando está cerrado. Posteriormente añadir canales, consentimiento/preferencias, programación fiable, reintentos y prevención de duplicados.
 
 ## 8. Autenticación y seguridad proporcional
 
@@ -215,6 +215,8 @@ Aceptadas por el alumno tras T01. Prevalecen sobre las propuestas abiertas de la
 **Alcance del portal (decisión del alumno, T21):** un CRM no necesita portal de cliente para ser útil, y la prioridad es el personal de la clínica. El portal se queda en lo mínimo (ver las citas propias): demuestra el acceso seguro a los datos de cada cliente y resuelve su identidad, que una reserva futura necesitaría. Se reconoce que, sin reserva, aporta poco al cliente final.
 
 **Portal (T22 y T23):** el cliente ve sus próximas citas y las anteriores, con servicio, día, hora y estado real (también Cancelada y No presentado), en solo lectura. No ve quién la realiza (las cuentas internas aún no tienen nombre: se decidirá más adelante si se añade), motivo ni notas. Un contacto Perdido conserva el acceso: esa etiqueta es interna y el portal no la revela. Solo hay lista, sin página de detalle.
+
+**Tareas de seguimiento (T24):** las crean admin y recepción desde la ficha, ligadas solo al contacto, con una descripción corta sin datos clínicos, una fecha prevista sin hora y un responsable. Pueden ser responsables las cuentas activas de administración y recepción, y un profesional solo si el contacto tiene alguna cita con él, también cancelada: así la tarea no le exige abrir una ficha que no puede ver. El profesional solo ve las suyas y no crea tareas; el cliente no las ve.
 
 **Notas (T21b):** la ficha y la cita admiten una nota corta, con aviso de no escribir datos clínicos. Las escriben admin y recepción, y la de la cita se edita con su propio botón, sin reprogramar. El profesional ve la de la ficha de sus contactos y la de sus citas. El cliente no las ve.
 

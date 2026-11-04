@@ -501,6 +501,12 @@ button.enlace {
   width: 100%;
 }
 
+/* «Nueva tarea» y su formulario, separados de la última tarea (T24). */
+.seguimientos > button,
+.seguimientos > form {
+  margin-top: 0.75rem;
+}
+
 /* Aquí la primera línea lleva la fecha completa, no solo la hora como en la agenda. */
 .seccion-ficha .cita,
 .portal .cita {

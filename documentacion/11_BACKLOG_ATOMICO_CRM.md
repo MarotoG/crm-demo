@@ -39,7 +39,7 @@ Sesiones de 45–90 minutos cuando sea posible; dividir una fila mayor si el alu
 | T21b | Email obligatorio y único por contacto | 2.5 | Un email por persona, obligatorio; teléfono opcional. La cuenta usa el email de la ficha y corregirlo cambia también el de acceso. Nota corta en ficha y cita, sin datos clínicos y sin llegar al portal. Surgida al probar T21; estimación orientativa, fuera de la suma de abajo. |
 | T22 | API del portal propio | 1.5 | Lista de citas del usuario, próximas y anteriores (decisión T22: sin ruta de detalle, porque no añade datos y no deja ID que manipular); cliente A no obtiene B manipulando filtros. Sin campos internos. Hecha junto con T23. |
 | T23 | Interfaz del portal de cliente | 1.5 | Acceso, citas propias y estado vacío responsive; comparación visual A/B y comprobación desde navegador. |
-| T24 | Seguimiento: crear y asignar tarea | 1.5 | Tarea de contacto con responsable y vencimiento; validaciones y consulta autorizada. |
+| T24 | Seguimiento: crear y asignar tarea | 1.5 | Tarea de contacto con responsable y vencimiento; validaciones y consulta autorizada. Decisión T24: la crean admin y recepción, solo ligada al contacto y con vencimiento por fecha; un profesional solo es responsable si tiene alguna cita con el contacto. |
 | T25 | Panel de pendientes y completar | 1.5 | Recepción/profesional ven las tareas permitidas, vencidas y hechas; no se implementa push. |
 | T26 | Eventos de auditoría mínimos | 1 | Acciones relevantes registradas sin secretos/payload clínico; describir límites, no afirmar inmutabilidad. |
 | T27 | Revisión de flujo y permisos | 2 | Login → lead → cita → seguimiento → portal; pruebas de acceso y errores relevantes; registrar resultados reales. |

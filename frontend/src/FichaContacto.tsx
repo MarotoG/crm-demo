@@ -7,6 +7,7 @@
 // estado y sin dar cita. La API solo se la da si el contacto tiene alguna cita con él (si no, 404).
 //
 // En T21, sus citas (CitasContacto) y, para administración y recepción, la invitación al portal.
+// En T24, sus tareas de seguimiento (SeguimientosContacto).
 //
 // Bloqueo optimista: la ficha guarda la versión que leyó y la envía al guardar o al cambiar
 // el estado. Si otra persona guardó antes, la API responde 409; entonces se pide la ficha
@@ -35,6 +36,7 @@ import {
   type DatosFormulario,
 } from "./Contactos";
 import InvitacionPortal from "./InvitacionPortal";
+import SeguimientosContacto from "./SeguimientosContacto";
 import { useSesion } from "./sesion";
 
 export const AVISO_OTRA_VERSION =
@@ -206,6 +208,7 @@ export default function FichaContacto() {
       )}
       {/* Fuera de Ficha: siguen visibles al editar y, si se está editando, no se pierde el enlace generado. */}
       {estado.tipo === "ok" && <CitasContacto contacto={estado.ficha.id} />}
+      {estado.tipo === "ok" && <SeguimientosContacto contacto={estado.ficha.id} />}
       {estado.tipo === "ok" && !soloLectura && <InvitacionPortal ficha={estado.ficha} />}
     </section>
   );

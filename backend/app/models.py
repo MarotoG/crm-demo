@@ -1,13 +1,13 @@
 """Modelos de SQLAlchemy. Alembic compara estos modelos con la BD para generar migraciones."""
 
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, MetaData, String, func, text, true
 from sqlalchemy.dialects.postgresql import ExcludeConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-from app.validators import MAX_CANCEL_NOTE_LENGTH, MAX_NOTE_LENGTH
+from app.validators import MAX_CANCEL_NOTE_LENGTH, MAX_FOLLOW_UP_LENGTH, MAX_NOTE_LENGTH
 
 # Nombres de restricciones predecibles, para que las migraciones sean estables.
 NAMING_CONVENTION = {
@@ -351,3 +351,26 @@ class PortalInvitation(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class FollowUpTask(Base):
+    """Tarea de seguimiento de un contacto (T24), con responsable y fecha prevista.
+
+    Solo cuelga del contacto, no de una cita (decisión T24). Vence por día de la clínica, sin hora.
+    Quién puede ser responsable lo comprueba la API, porque depende de otras tablas.
+    """
+
+    __tablename__ = "follow_up_tasks"
+    __table_args__ = (
+        CheckConstraint(_name_normalized("description"), name="description_normalized"),
+        CheckConstraint(f"description ~ '^[ -~]{{1,{MAX_FOLLOW_UP_LENGTH}}}$'", name="description_ascii"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # Sin ON DELETE: contactos y cuentas no se borran; si alguien lo intentara, la BD lo impide.
+    contact_id: Mapped[int] = mapped_column(ForeignKey("contacts.id"), index=True)
+    assigned_to_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    due_on: Mapped[date]
+    description: Mapped[str] = mapped_column(String(MAX_FOLLOW_UP_LENGTH))
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
