@@ -10,6 +10,7 @@ import Agenda from "./Agenda";
 import { Bienvenida, ConPermiso, Inicio, NoEncontrada, RedirigirFicha, RutaProtegida, Usuarios } from "./Areas";
 import Contactos from "./Contactos";
 import FichaContacto from "./FichaContacto";
+import Invitacion from "./Invitacion";
 import Login from "./Login";
 import Servicios, { MisServicios } from "./Servicios";
 import { SesionProvider } from "./sesion";
@@ -20,6 +21,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Inicio />} />
         <Route path="/login" element={<Login />} />
+        <Route path="/invitacion" element={<Invitacion />} />
         <Route element={<RutaProtegida />}>
           <Route path="/agenda" element={<ConPermiso seccion="agenda"><Agenda /></ConPermiso>} />
           <Route path="/contactos" element={<ConPermiso seccion="contactos"><Contactos /></ConPermiso>} />

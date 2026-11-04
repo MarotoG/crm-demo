@@ -1,7 +1,7 @@
 // Pantalla de login (T10). Los mensajes de error vienen de la API (401, 429) o de api.ts (503, red).
 
 import { useState, type FormEvent } from "react";
-import { Navigate } from "react-router";
+import { Navigate, useLocation } from "react-router";
 
 import { ErrorApi } from "./api";
 import EstadoSistema from "./EstadoSistema";
@@ -10,6 +10,8 @@ import { useSesion } from "./sesion";
 
 export default function Login() {
   const { estado, entrar } = useSesion();
+  // Al llegar desde la invitación (T21), «Cuenta creada».
+  const exito = (useLocation().state as { aviso?: string } | null)?.aviso;
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [enviando, setEnviando] = useState(false);
@@ -38,6 +40,11 @@ export default function Login() {
 
       <form className="tarjeta formulario" onSubmit={enviar} aria-labelledby="titulo-login">
         <h2 id="titulo-login">Entrar</h2>
+        {exito && (
+          <p className="exito" role="status">
+            {exito}
+          </p>
+        )}
         {estado.aviso && <p className="aviso">{estado.aviso}</p>}
         <label>
           Email

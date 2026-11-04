@@ -51,6 +51,9 @@ beforeEach(() => {
     "GET /api/contacts": () => ({ status: 200, cuerpo: { total: 1, items: [ANA] } }),
     "GET /api/contacts/7": () => ({ status: 200, cuerpo: ANA }),
     "GET /api/contacts/owners": () => ({ status: 200, cuerpo: RESPONSABLES }),
+    // Citas e invitación (T21) tienen sus pruebas en Invitacion.test.tsx; aquí, sin botones de más.
+    "GET /api/appointments/by-contact/7": () => ({ status: 200, cuerpo: { total: 0, items: [] } }),
+    "GET /api/contacts/7/portal": () => ({ status: 200, cuerpo: { has_account: true, invitation_expires_at: null } }),
   };
   vi.stubGlobal(
     "fetch",

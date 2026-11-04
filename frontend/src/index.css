@@ -485,6 +485,27 @@ button.enlace {
   padding: 0;
 }
 
+/* Citas e invitación al portal, bajo los datos de la ficha (T21). */
+.seccion-ficha {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--borde);
+}
+
+.seccion-ficha h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+
+.seccion-ficha input {
+  width: 100%;
+}
+
+/* Aquí la primera línea lleva la fecha completa, no solo la hora como en la agenda. */
+.seccion-ficha .cita {
+  display: flex;
+}
+
 .cita {
   display: flex;
   flex-direction: column;

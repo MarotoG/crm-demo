@@ -11,6 +11,10 @@ from argon2.exceptions import InvalidHashError, VerificationError
 # (perfil de memoria reducida de la RFC 9106). Quedan escritos en cada hash.
 _hasher = PasswordHasher()
 
+# Sin reglas de composición: una frase larga protege más que obligar a mezclar símbolos.
+MIN_PASSWORD_LENGTH = 12
+MAX_PASSWORD_LENGTH = 1024  # evita calcular Argon2id sobre textos enormes
+
 
 def hash_password(password: str) -> str:
     return _hasher.hash(password)

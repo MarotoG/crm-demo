@@ -18,6 +18,8 @@ PUBLICAS = {
     ("GET", "/api/health/db"),
     ("POST", "/api/auth/login"),
     ("POST", "/api/auth/logout"),  # sin sesión válida no hay nada que cerrar (204)
+    ("POST", "/api/portal-invitations/check"),  # autoriza el token del enlace (T21)
+    ("POST", "/api/portal-invitations/accept"),
 }
 
 

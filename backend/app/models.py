@@ -38,8 +38,8 @@ _ROLES_SQL = ", ".join(f"'{role.value}'" for role in Role)
 class User(Base):
     """Cuenta de acceso de personal o de cliente (T07).
 
-    El vínculo único con el contacto del cliente se añadirá cuando exista la tabla
-    contacts; las cuentas de cliente reales se crearán por invitación (T21).
+    Las cuentas de cliente nacen de una invitación (T21) o del comando de demo, con un vínculo
+    único a su contacto. Una cuenta de cliente sin vínculo no tiene citas que ver.
     """
 
     __tablename__ = "users"
@@ -48,6 +48,8 @@ class User(Base):
         # La BD también exige el email ya normalizado: dos mayúsculas distintas no
         # pueden colarse como cuentas diferentes aunque alguien salte la API.
         CheckConstraint("email = lower(btrim(email))", name="email_normalized"),
+        # Solo los clientes representan a un contacto (T21).
+        CheckConstraint("contact_id IS NULL OR role = 'client'", name="contact_only_for_client"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -56,6 +58,9 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(20))
     active: Mapped[bool] = mapped_column(default=True, server_default=true())
+    # Sin ON DELETE: los contactos no se borran. Único: una cuenta por contacto y al revés (T21).
+    # use_alter: contacts también apunta a users; así SQLAlchemy puede ordenar las dos tablas.
+    contact_id: Mapped[int | None] = mapped_column(ForeignKey("contacts.id", use_alter=True), unique=True)
 
 
 class UserSession(Base):
@@ -318,3 +323,33 @@ class Appointment(Base):
     cancel_note: Mapped[str | None] = mapped_column(String(MAX_CANCEL_NOTE_LENGTH))
     # Al marcar la asistencia (T20b), la primera vez; corregirla no la cambia (plazo de 7 días).
     attended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PortalInvitation(Base):
+    """Invitación al portal (T21): un enlace de un solo uso ligado a un contacto.
+
+    Como en las sesiones, solo se guarda el hash SHA-256 del token: quien lea esta tabla no puede
+    usar los enlaces, y por eso un enlace solo se ve al generarlo. El vínculo nace de quien invita,
+    no de lo que escriba el navegador.
+    """
+
+    __tablename__ = "portal_invitations"
+    __table_args__ = (
+        CheckConstraint("used_at IS NULL OR revoked_at IS NULL", name="used_or_revoked"),
+        # Como mucho una abierta por contacto: generar otra anula la anterior en la misma transacción.
+        Index(
+            "uq_portal_invitations_contact_open",
+            "contact_id",
+            unique=True,
+            postgresql_where=text("used_at IS NULL AND revoked_at IS NULL"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    contact_id: Mapped[int] = mapped_column(ForeignKey("contacts.id"))
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

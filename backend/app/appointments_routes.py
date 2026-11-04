@@ -27,7 +27,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 from pydantic_core import PydanticCustomError
-from sqlalchemy import func, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -86,6 +86,9 @@ RANGE_MISSING_MESSAGE = "Indica un día (date) o un intervalo (from y to)"
 RANGE_ORDER_MESSAGE = "El último día no puede ser anterior al primero"
 RANGE_TOO_LONG_MESSAGE = f"El intervalo no puede pasar de {MAX_RANGE_DAYS} días"
 OWN_AGENDA_MESSAGE = "Solo puedes ver tus citas"
+# Citas en la ficha del contacto (T21): las más recientes, como la lista de contactos (T12).
+CONTACT_LIST_LIMIT = 20
+CONTACT_NOT_FOUND_LIST_MESSAGE = "Contacto no encontrado"
 # Asistencia (T20b): desde que empieza la cita; se corrige durante 7 días desde que se marcó.
 ATTENDANCE_STATUSES = frozenset({AppointmentStatus.COMPLETED, AppointmentStatus.NO_SHOW})
 CORRECTION_DAYS = 7
@@ -197,6 +200,34 @@ class AgendaItem(AppointmentOut):
     staff_email: str
 
 
+class ContactAppointments(BaseModel):
+    """Las citas de la ficha (T21): `total` las cuenta todas, aunque solo vengan las 20 últimas."""
+
+    total: int
+    items: list[AgendaItem]
+
+
+# Cada cita con los nombres que se leen en la lista (agenda y ficha).
+_AGENDA_SELECT = (
+    select(Appointment, Contact.first_name, Contact.last_name, Service.name, User.email)
+    .join(Contact, Contact.id == Appointment.contact_id)
+    .join(Service, Service.id == Appointment.service_id)
+    .join(User, User.id == Appointment.staff_id)
+)
+
+
+def _agenda_items(db: Session, query: Select, zone: ZoneInfo) -> list[AgendaItem]:
+    return [
+        AgendaItem(
+            **_out(appointment, zone).model_dump(),
+            contact_name=f"{first_name} {last_name}",
+            service_name=service_name,
+            staff_email=staff_email,
+        )
+        for appointment, first_name, last_name, service_name, staff_email in db.execute(query)
+    ]
+
+
 def _days_bounds(first: date, last: date, zone: ZoneInfo) -> tuple[datetime, datetime]:
     """Los días de la clínica de `first` a `last` (incluido) como instantes [00:00 de `first`, 00:00
     del día siguiente a `last`). Un día con cambio de horario dura 23 o 25 horas: por eso se
@@ -298,26 +329,40 @@ def list_appointments(
     zone = get_settings().clinic_zone
     start, end = _days_bounds(first, last, zone)
     query = (
-        select(Appointment, Contact.first_name, Contact.last_name, Service.name, User.email)
-        .join(Contact, Contact.id == Appointment.contact_id)
-        .join(Service, Service.id == Appointment.service_id)
-        .join(User, User.id == Appointment.staff_id)
-        .where(Appointment.starts_at < end, Appointment.ends_at > start)
+        _AGENDA_SELECT.where(Appointment.starts_at < end, Appointment.ends_at > start)
         .order_by(Appointment.starts_at, Appointment.id)
     )
     if staff_id is not None:
         query = query.where(Appointment.staff_id == staff_id)
     if contact_id is not None:
         query = query.where(Appointment.contact_id == contact_id)
-    return [
-        AgendaItem(
-            **_out(appointment, zone).model_dump(),
-            contact_name=f"{first_name} {last_name}",
-            service_name=service_name,
-            staff_email=staff_email,
-        )
-        for appointment, first_name, last_name, service_name, staff_email in db.execute(query)
-    ]
+    return _agenda_items(db, query, zone)
+
+
+@router.get("/by-contact/{contact_id}", responses={404: {"description": "Contacto no encontrado"}})
+def list_contact_appointments(
+    contact_id: int,
+    user: User = Depends(require_roles(Role.ADMIN, Role.RECEPTION, Role.PROFESSIONAL)),
+    db: Session = Depends(get_db),
+) -> ContactAppointments:
+    """Las citas de un contacto para su ficha (T21): las 20 de fecha más reciente, también
+    canceladas, y el total.
+
+    El profesional solo ve las suyas; sin ninguna, 404 como en la ficha (T20): no se revela que el
+    contacto existe. El cliente, 403.
+    """
+    conditions = [Appointment.contact_id == contact_id]
+    if user.role == Role.PROFESSIONAL:
+        conditions.append(Appointment.staff_id == user.id)
+    total = db.scalar(select(func.count()).select_from(Appointment).where(*conditions))
+    if db.get(Contact, contact_id) is None or (user.role == Role.PROFESSIONAL and total == 0):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, CONTACT_NOT_FOUND_LIST_MESSAGE)
+    query = (
+        _AGENDA_SELECT.where(*conditions)
+        .order_by(Appointment.starts_at.desc(), Appointment.id.desc())
+        .limit(CONTACT_LIST_LIMIT)
+    )
+    return ContactAppointments(total=total, items=_agenda_items(db, query, get_settings().clinic_zone))
 
 
 @router.post(

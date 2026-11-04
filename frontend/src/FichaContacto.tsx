@@ -6,6 +6,8 @@
 // El profesional (T20) la abre desde «Mi agenda», en solo lectura: sin editar, sin cambiar el
 // estado y sin dar cita. La API solo se la da si el contacto tiene alguna cita con él (si no, 404).
 //
+// En T21, sus citas (CitasContacto) y, para administración y recepción, la invitación al portal.
+//
 // Bloqueo optimista: la ficha guarda la versión que leyó y la envía al guardar o al cambiar
 // el estado. Si otra persona guardó antes, la API responde 409; entonces se pide la ficha
 // actual y, si su versión ha cambiado, se muestra con un aviso en vez de pisar el cambio ajeno.
@@ -23,6 +25,7 @@ import {
   type EstadoContacto,
   type Responsable,
 } from "./api";
+import CitasContacto from "./CitasContacto";
 import {
   formatoFecha,
   formatoTelefono,
@@ -31,6 +34,7 @@ import {
   NOMBRE_ORIGEN,
   type DatosFormulario,
 } from "./Contactos";
+import InvitacionPortal from "./InvitacionPortal";
 import { useSesion } from "./sesion";
 
 export const AVISO_OTRA_VERSION =
@@ -199,6 +203,9 @@ export default function FichaContacto() {
           alCambiarEstado={(destino) => aEstado(estado.ficha, destino)}
         />
       )}
+      {/* Fuera de Ficha: siguen visibles al editar y, si se está editando, no se pierde el enlace generado. */}
+      {estado.tipo === "ok" && <CitasContacto contacto={estado.ficha.id} />}
+      {estado.tipo === "ok" && !soloLectura && <InvitacionPortal ficha={estado.ficha} />}
     </section>
   );
 }

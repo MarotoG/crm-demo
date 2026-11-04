@@ -5,7 +5,8 @@ Uso, desde backend/ y con la BD migrada:
 
 Las contraseñas no están en el código: se leen de CRM_DEMO_PASSWORD_<ROL> en el
 .env de la raíz (no versionado). Es idempotente: crea las cuentas que falten y, en
-las existentes, aplica la contraseña actual del .env, el rol y las reactiva.
+las existentes, aplica la contraseña actual del .env, el rol y las reactiva. La cuenta de
+cliente queda vinculada a un contacto ficticio, que se crea si falta (T21).
 No muestra nunca las contraseñas ni sus hashes.
 """
 
@@ -18,10 +19,8 @@ from sqlalchemy.orm import Session
 
 from app.config import ENV_FILE
 from app.db import get_engine
-from app.models import Role, User
-from app.security import hash_password, normalize_email
-
-MIN_PASSWORD_LENGTH = 12
+from app.models import Contact, ContactSource, Role, User
+from app.security import MIN_PASSWORD_LENGTH, hash_password, normalize_email
 
 # Dominio reservado para ejemplos (RFC 2606): nunca pertenecerá a nadie real.
 DEMO_EMAILS = {
@@ -58,20 +57,36 @@ def check_passwords(passwords: DemoPasswords) -> list[str]:
     return problems
 
 
+def demo_contact_id(session: Session) -> int:
+    """El contacto ficticio de la cuenta de cliente (T21): lo crea si falta."""
+    email = DEMO_EMAILS[Role.CLIENT]
+    contact_id = session.scalar(
+        select(Contact.id).where(Contact.first_name == "Demo", Contact.last_name == "Cliente", Contact.email == email)
+    )
+    if contact_id is not None:
+        return contact_id
+    contact = Contact(first_name="Demo", last_name="Cliente", email=email, source=ContactSource.OTHER)
+    session.add(contact)
+    session.flush()
+    return contact.id
+
+
 def upsert_demo_users(session: Session, passwords: DemoPasswords) -> list[str]:
     """Crea o actualiza las cuentas dentro de la sesión dada; devuelve un resumen."""
     summary = []
     for role, email in DEMO_EMAILS.items():
         email = normalize_email(email)
         password_hash = hash_password(getattr(passwords, role.value).get_secret_value())
+        contact_id = demo_contact_id(session) if role == Role.CLIENT else None
         user = session.scalar(select(User).where(User.email == email))
         if user is None:
-            session.add(User(email=email, password_hash=password_hash, role=role, active=True))
+            session.add(User(email=email, password_hash=password_hash, role=role, active=True, contact_id=contact_id))
             summary.append(f"creada      {email} ({role.value})")
         else:
             user.password_hash = password_hash
             user.role = role
             user.active = True
+            user.contact_id = contact_id
             summary.append(f"actualizada {email} ({role.value})")
     return summary
 

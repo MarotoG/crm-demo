@@ -34,7 +34,7 @@ El MVP no incluye autogestión pública de reservas. La recepción registra al l
 
 Fotos antes/después; historial clínico, alergias y notas SOAP; consentimientos digitales; recurso/sala; cobros Stripe, depósitos, facturación fiscal y caja; widget/iframe público; Meta Ads; WhatsApp/SMS/email automatizado; notificaciones push; multiempresa y suscripciones SaaS; app nativa; trabajo offline con información personal. No añadir estas piezas por iniciativa del agente antes de cerrar el núcleo y entregables.
 
-Si queda margen, primera ampliación: PWA instalable con shell estático y prueba en dispositivos reales. No cachear API autenticada ni datos personales para offline. Las fotos quedan expresamente para una versión posterior, según prioridad del alumno.
+Si queda margen tras cerrar el núcleo, se elegirá entre las ideas de ampliación (sección 14). Si se elige la PWA instalable: shell estático y prueba en dispositivos reales, sin cachear API autenticada ni datos personales para offline.
 
 ## 3. Stack recomendado y alternativas
 
@@ -72,7 +72,7 @@ Cloudflare Tunnel, si es el mecanismo elegido, usa conexiones salientes y no nec
 | Consultar agenda | Clínica | Clínica | Propia | Sus citas |
 | Marcar cita realizada/no presentado | Sí | Sí | Solo las asignadas | No |
 | Ver/gestionar seguimientos internos | Sí | Todos los de la clínica | Los asignados | No |
-| Invitar al portal (cuenta de cliente) | Sí | Sí, solo rol cliente y para contactos con al menos una cita | No | Acepta su propia invitación |
+| Invitar al portal (cuenta de cliente) | Sí | Sí, solo rol cliente; cualquier contacto salvo Perdido (decisión T21) | No | Acepta su propia invitación |
 | Consultar o subir fotos | Fuera del núcleo | Fuera del núcleo | Fuera del núcleo | Fuera del núcleo |
 
 Definir la autorización en cada caso de uso del backend, incluidos filtros y acceso por ID. Ocultar un botón no protege un endpoint. Para el portal usar la relación entre usuario autenticado y contacto; un parámetro `contact_id` aportado por el navegador no decide la identidad. Los endpoints de cliente devuelven solo los campos permitidos, sin notas internas ni datos de otros profesionales/clientes.
@@ -208,8 +208,10 @@ Aceptadas por el alumno tras T01. Prevalecen sobre las propuestas abiertas de la
 
 1. Fuera del CRM: anuncio → web de la clínica → WhatsApp. El CRM registra el origen del contacto.
 2. Recepción crea el contacto y la cita.
-3. Desde que el contacto tiene al menos una cita, recepción o admin generan una invitación al portal: enlace de un solo uso, ligado al contacto, que caduca (propuesta: 72 h). Recepción lo envía manualmente por WhatsApp; no hay envío automático de email en el núcleo.
-4. El cliente abre el enlace, indica su email y elige su contraseña; consulta sus citas. Recepción solo puede crear cuentas de rol cliente.
+3. Recepción o admin generan una invitación al portal para cualquier contacto salvo Perdido, con o sin citas (cambia en T21 la condición de T03, «al menos una cita»): enlace de un solo uso, ligado al contacto, que caduca a las 24 h (T21; T03 proponía 72 h). Generar otro anula el anterior. Recepción lo envía manualmente por WhatsApp; no hay envío automático de email en el núcleo.
+4. El cliente abre el enlace, indica su email (libre, sin precargar y sin cambiar la ficha) y elige su contraseña; después entra por el login y consulta sus citas. Recepción solo puede crear cuentas de rol cliente. Sin recuperación de contraseña en la demo: límite documentado en el README.
 5. Plan B si falta tiempo: cuenta creada por admin con contraseña temporal y cambio obligatorio.
 
-**Orden de ampliaciones tras el núcleo:** PWA instalable, fotos antes/después y después reserva por el cliente desde su portal. Reservar sin registro previo (widget público) e integración con WhatsApp quedan para fases posteriores.
+**Alcance del portal (decisión del alumno, T21):** un CRM no necesita portal de cliente para ser útil, y la prioridad es el personal de la clínica. El portal se queda en lo mínimo (ver las citas propias): demuestra el acceso seguro a los datos de cada cliente y resuelve su identidad, que una reserva futura necesitaría. Se reconoce que, sin reserva, aporta poco al cliente final.
+
+**Ideas de ampliación tras el núcleo (decisión T21, sustituye al orden de T03):** PWA instalable, fotos antes/después y reserva por el cliente desde su portal. No tienen orden fijo: al cerrar el núcleo se mencionan y se elige por cuál empezar según lo que más convenga. Reservar sin registro previo (widget público) e integración con WhatsApp quedan para fases posteriores.

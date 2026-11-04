@@ -35,7 +35,7 @@ Sesiones de 45–90 minutos cuando sea posible; dividir una fila mayor si el alu
 | T18 | Agenda de recepción | 2 | Crear cita desde formulario y verla en lista diaria; filtrar profesional/fecha; no hace falta calendario drag-and-drop. |
 | T19 | Reprogramar y cancelar | 1.5 | Mismas validaciones al editar; conflicto explicado, datos consistentes. Regresión de T17. |
 | T20 | Área del profesional | 1.5 | Solo agenda y contactos asignados; cambio de estado permitido y prueba de acceso a cita ajena. |
-| T21 | Invitación al portal y cuenta cliente | 2.5 | Recepción/admin generan enlace de un solo uso, con caducidad, para un contacto con al menos una cita; el cliente elige email y contraseña. Vínculo explícito y único; enlace caducado/reutilizado rechazado; recepción no crea cuentas internas. Plan B: contraseña temporal del admin. |
+| T21 | Invitación al portal y cuenta cliente | 2.5 | Recepción/admin generan enlace de un solo uso, con caducidad de 24 h, para cualquier contacto salvo Perdido (decisión T21; antes, «con al menos una cita»); el cliente elige email y contraseña. Vínculo explícito y único; enlace caducado/reutilizado rechazado; recepción no crea cuentas internas. Incluye la lista de citas en la ficha del contacto (decisión T21). Plan B: contraseña temporal del admin. |
 | T22 | API del portal propio | 1.5 | Lista y detalle de citas del usuario; cliente A no obtiene B manipulando ID o filtros. Sin campos internos. |
 | T23 | Interfaz del portal de cliente | 1.5 | Acceso, citas propias y estado vacío responsive; comparación visual A/B y comprobación desde navegador. |
 | T24 | Seguimiento: crear y asignar tarea | 1.5 | Tarea de contacto con responsable y vencimiento; validaciones y consulta autorizada. |
@@ -83,7 +83,7 @@ Commits pequeños por tarea coherente; una etiqueta al cerrar cada flujo demostr
 
 ## Ampliaciones aplazadas
 
-PWA instalable: solo con margen tras cerrar el candidato y antes de grabar, estimar aparte y probar dispositivos. Orden decidido en T03 tras el núcleo: PWA, fotos y después reserva por el cliente desde su portal. Push, Stripe, facturación, widget sin registro, WhatsApp/n8n, salas y multiempresa quedan para versiones posteriores. Si se cambia esa decisión, recalcular alcance/tiempo antes de encargar código.
+Ideas de ampliación tras el núcleo (decisión T21, sustituye al orden de T03): PWA instalable, fotos antes/después y reserva por el cliente desde su portal. No tienen orden fijo: al cerrar el núcleo se mencionan y el alumno elige por cuál empezar según lo que más convenga, estimándola aparte y antes de grabar. La prioridad sigue siendo el personal de la clínica; el portal se queda en lo mínimo hasta entonces. Push, Stripe, facturación, widget sin registro, WhatsApp/n8n, salas y multiempresa quedan para versiones posteriores.
 
 
 ## Revisión de Quijote y contingencia

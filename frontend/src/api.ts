@@ -133,8 +133,8 @@ async function errorDeRespuesta(respuesta: Response): Promise<ErrorApi> {
 
 async function mensajeDeRespuesta(respuesta: Response): Promise<string> {
   if (respuesta.status === 503) return "Servicio no disponible. Inténtalo de nuevo en unos minutos";
-  // 401, 403, 409 y 429 traen un mensaje pensado para el usuario (p. ej. «Email o contraseña incorrectos»).
-  if ([401, 403, 409, 429].includes(respuesta.status)) {
+  // 401, 403, 409, 410 y 429 traen un mensaje pensado para el usuario (p. ej. «Email o contraseña incorrectos»).
+  if ([401, 403, 409, 410, 429].includes(respuesta.status)) {
     try {
       const cuerpo: unknown = await respuesta.json();
       if (typeof cuerpo === "object" && cuerpo !== null && "detail" in cuerpo && typeof cuerpo.detail === "string") {
@@ -379,4 +379,33 @@ export function marcarAsistencia(
   csrf: string,
 ): Promise<Omit<CitaAgenda, "contact_name" | "service_name" | "staff_email">> {
   return peticion(`/api/appointments/${id}/attendance`, { method: "POST", cuerpo: datos, csrf });
+}
+
+/** Las citas de la ficha (T21): las 20 de fecha más reciente, también canceladas, y el total. El
+ * profesional, solo las suyas. */
+export function listarCitasDeContacto(contacto: number): Promise<{ total: number; items: CitaAgenda[] }> {
+  return peticion(`/api/appointments/by-contact/${contacto}`);
+}
+
+// --- Invitación al portal (T21) ------------------------------------------------
+
+export type EstadoPortal = { has_account: boolean; invitation_expires_at: string | null };
+
+export function obtenerEstadoPortal(contacto: number): Promise<EstadoPortal> {
+  return peticion<EstadoPortal>(`/api/contacts/${contacto}/portal`);
+}
+
+/** El token solo viene en esta respuesta: en la BD queda su hash. Generar otro anula el anterior. */
+export function generarInvitacion(contacto: number, csrf: string): Promise<{ token: string; expires_at: string }> {
+  return peticion(`/api/contacts/${contacto}/portal-invitation`, { method: "POST", csrf });
+}
+
+/** Sin sesión: lo que autoriza es el token del enlace. 410 si no vale. */
+export function comprobarInvitacion(token: string): Promise<void> {
+  return peticion<void>("/api/portal-invitations/check", { method: "POST", cuerpo: { token } });
+}
+
+/** Crea la cuenta y gasta el enlace; no inicia sesión. 409 si el email está en uso; 410 si no vale. */
+export function aceptarInvitacion(datos: { token: string; email: string; password: string }): Promise<void> {
+  return peticion<void>("/api/portal-invitations/accept", { method: "POST", cuerpo: datos });
 }
