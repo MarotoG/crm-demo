@@ -122,6 +122,7 @@ def test_admin_y_recepcion_crean_una_cita(db, usuarios, escena, role):
         "created_at": "",
         "cancel_reason": None,
         "cancel_note": None,
+        "attended_at": None,
     }
     guardada = db.get(Appointment, cita["id"])
     # En la BD, el instante: 9:30 en Nueva York son las 14:30 UTC.
@@ -524,7 +525,7 @@ def test_la_cancelada_libera_la_franja(db, escena, ocupada):
 
 @pytest.mark.parametrize("estado", ["completed", "no_show"])
 def test_realizada_y_no_presentado_siguen_ocupando(db, escena, ocupada, estado):
-    db.execute(update(Appointment).where(Appointment.id == ocupada["id"]).values(status=estado))
+    db.execute(update(Appointment).where(Appointment.id == ocupada["id"]).values(status=estado, attended_at=AHORA))
     db.commit()
 
     response = crear(para_otro(db, escena))
@@ -909,6 +910,16 @@ def en_bd(db, cita: dict) -> Appointment:
     return db.get(Appointment, cita["id"], populate_existing=True)
 
 
+def en_estado(estado: str) -> dict:
+    """Los campos que la BD exige con cada estado: motivo si está cancelada (T19), hora de la
+    asistencia si está Realizada o No presentado (T20b)."""
+    return {
+        "status": estado,
+        "cancel_reason": "other" if estado == "cancelled" else None,
+        "attended_at": AHORA if estado in ("completed", "no_show") else None,
+    }
+
+
 def marcar(db, cita: dict, **valores):
     """Cambia la cita directamente en la BD (otra persona, o estados que llegarán después)."""
     db.execute(update(Appointment).where(Appointment.id == cita["id"]).values(**valores))
@@ -1151,7 +1162,7 @@ def test_con_la_version_antigua_409_y_no_se_pisa(db, escena, ocupada):
 )
 def test_solo_se_cambian_las_programadas(db, escena, ocupada, estado, nombre):
     # Con la versión al día: lo que lo impide es el estado.
-    marcar(db, ocupada, status=estado, cancel_reason="other" if estado == "cancelled" else None)
+    marcar(db, ocupada, **en_estado(estado))
 
     mensaje = {"detail": f"La cita está «{nombre}»: ya no se puede cambiar"}
     assert (reprogramar(ocupada).status_code, reprogramar(ocupada).json()) == (409, mensaje)
@@ -1277,7 +1288,7 @@ def test_si_le_queda_otra_programada_sigue_en_cita_agendada(db, escena, ocupada)
 @pytest.mark.parametrize("estado", ["completed", "no_show", "cancelled"])
 def test_las_que_no_estan_programadas_no_cuentan_como_pendientes(db, escena, ocupada, estado):
     otra = crear(datos(escena, starts_at="2027-01-12T09:30")).json()
-    marcar(db, otra, status=estado, cancel_reason="other" if estado == "cancelled" else None)
+    marcar(db, otra, **en_estado(estado))
 
     assert cancelar(ocupada).status_code == 200
 
@@ -1346,3 +1357,325 @@ def test_la_bd_admite_una_cancelada_con_motivo_y_detalle(db, escena):
         {"c": contact.id, "s": service.id, "p": persona.id},
     )
     assert contar(db) == 1
+
+
+# --- Asistencia (T20b) -------------------------------------------------------------------------------
+
+# Por defecto, una cita de 9:00 a 10:00 de hoy (04/01/2027 en Nueva York): empezó hace una hora.
+HACE_UNA_HORA = datetime(2027, 1, 4, 14, 0, tzinfo=UTC)
+
+
+def cita_en_bd(db, escena, contact: Contact | None = None, persona: User | None = None, inicio: datetime = HACE_UNA_HORA,
+               **valores) -> Appointment:
+    """Una cita guardada directamente (la API no deja crearlas en el pasado)."""
+    cita = Appointment(
+        contact_id=(contact or escena[0]).id,
+        service_id=escena[1].id,
+        staff_id=(persona or escena[2]).id,
+        starts_at=inicio,
+        ends_at=inicio + timedelta(minutes=60),
+        duration_minutes=60,
+        **valores,
+    )
+    db.add(cita)
+    db.commit()
+    return cita
+
+
+def asistencia(cita: Appointment, estado: str = "completed", role: Role = Role.RECEPTION, version: int | None = None, **extra):
+    client, csrf = sesion_de(role)
+    cuerpo = {"version": cita.version if version is None else version, "status": estado, **extra}
+    return client.post(f"/api/appointments/{cita.id}/attendance", json=cuerpo, headers=csrf)
+
+
+def a_las(momento: datetime):
+    """Mueve el reloj de la API (la fixture lo devuelve a AHORA al terminar)."""
+    fastapi_app.dependency_overrides[get_now] = lambda: momento
+
+
+def estado_de(db, contact: Contact) -> tuple[str, int]:
+    guardado = db.get(Contact, contact.id, populate_existing=True)
+    return guardado.status, guardado.version
+
+
+def con_estado(db, contact: Contact, estado: ContactStatus) -> Contact:
+    db.execute(update(Contact).where(Contact.id == contact.id).values(status=estado))
+    db.commit()
+    return contact
+
+
+@pytest.mark.parametrize("role", [Role.ADMIN, Role.RECEPTION])
+def test_admin_y_recepcion_marcan_realizada(db, usuarios, escena, role):
+    contact = con_estado(db, escena[0], ContactStatus.SCHEDULED)
+    cita = cita_en_bd(db, escena)
+
+    response = asistencia(cita, "completed", role)
+
+    assert response.status_code == 200
+    cuerpo = response.json()
+    assert (cuerpo["status"], cuerpo["version"]) == ("completed", 2)
+    assert cuerpo["attended_at"] == "2027-01-04T10:00:00-05:00"  # cuándo se marcó, en la hora de la clínica
+    guardada = db.get(Appointment, cita.id, populate_existing=True)
+    assert (guardada.attended_at, guardada.updated_by_id) == (AHORA, usuarios[role].id)
+    # La primera Realizada lo hace Cliente, con versión y autor.
+    assert estado_de(db, contact) == ("client", 2)
+    assert db.get(Contact, contact.id).updated_by_id == usuarios[role].id
+
+
+def test_marcar_no_presentado(db, escena):
+    cita = cita_en_bd(db, escena)
+
+    response = asistencia(cita, "no_show")
+
+    assert response.status_code == 200
+    assert (response.json()["status"], response.json()["attended_at"]) == ("no_show", "2027-01-04T10:00:00-05:00")
+
+
+def test_la_profesional_marca_las_suyas(db, usuarios, escena):
+    cita = cita_en_bd(db, escena)
+
+    assert asistencia(cita, "completed", Role.PROFESSIONAL).status_code == 200
+    assert db.get(Appointment, cita.id, populate_existing=True).updated_by_id == usuarios[Role.PROFESSIONAL].id
+
+
+@pytest.mark.parametrize("de", ["otra", "admin"])
+def test_la_cita_de_otra_persona_es_404_como_si_no_existiera(db, usuarios, escena, de):
+    persona = cuenta(db, "pro2@prueba.example.com", Role.PROFESSIONAL) if de == "otra" else usuarios[Role.ADMIN]
+    cita = cita_en_bd(db, escena, persona=persona)
+
+    response = asistencia(cita, "completed", Role.PROFESSIONAL)
+
+    assert (response.status_code, response.json()) == (404, {"detail": "Cita no encontrada"})
+    assert db.get(Appointment, cita.id, populate_existing=True).status == "scheduled"
+
+
+def test_cliente_403_sin_csrf_403_y_cita_inexistente_404(db, escena):
+    cita = cita_en_bd(db, escena)
+
+    assert asistencia(cita, "completed", Role.CLIENT).status_code == 403
+    client, csrf = sesion_de(Role.RECEPTION)
+    cuerpo = {"version": 1, "status": "completed"}
+    assert client.post(f"/api/appointments/{cita.id}/attendance", json=cuerpo).status_code == 403
+    inexistente = client.post("/api/appointments/999999/attendance", json=cuerpo, headers=csrf)
+    assert (inexistente.status_code, inexistente.json()) == (404, {"detail": "Cita no encontrada"})
+    assert db.get(Appointment, cita.id, populate_existing=True).status == "scheduled"
+
+
+def test_antes_de_empezar_no_se_marca_y_justo_a_la_hora_si(db, escena):
+    futura = cita_en_bd(db, escena, inicio=AHORA + timedelta(minutes=5))
+    a_la_hora = cita_en_bd(db, escena, inicio=AHORA + timedelta(hours=3))
+
+    response = asistencia(futura)
+    assert (response.status_code, response.json()) == (
+        409,
+        {"detail": "La cita aún no ha empezado: la asistencia se marca desde su hora de inicio"},
+    )
+    a_las(AHORA + timedelta(hours=3))
+    assert asistencia(a_la_hora).status_code == 200
+
+
+def test_una_cancelada_no_se_marca(db, escena):
+    cita = cita_en_bd(db, escena, status="cancelled", cancel_reason="clinic")
+
+    response = asistencia(cita)
+
+    assert (response.status_code, response.json()) == (409, {"detail": "La cita está «Cancelada»: no se marca la asistencia"})
+
+
+def test_una_cita_vieja_sin_marcar_se_marca_aunque_hayan_pasado_semanas(db, escena):
+    cita = cita_en_bd(db, escena, inicio=AHORA - timedelta(days=40))
+
+    assert asistencia(cita).status_code == 200
+
+
+def test_version_antigua_409_sin_cambios(db, escena):
+    cita = cita_en_bd(db, escena)
+    assert asistencia(cita, "no_show").status_code == 200
+
+    response = asistencia(cita, "completed", version=1)
+
+    assert (response.status_code, response.json()) == (409, {"detail": CAMBIADA})
+    assert db.get(Appointment, cita.id, populate_existing=True).status == "no_show"
+
+
+@pytest.mark.parametrize("estado, nombre", [("completed", "Realizada"), ("no_show", "No presentado")])
+def test_marcarla_igual_que_esta_es_409(db, escena, estado, nombre):
+    cita = cita_en_bd(db, escena, status=estado, attended_at=AHORA)
+
+    response = asistencia(cita, estado)
+
+    assert (response.status_code, response.json()) == (409, {"detail": f"La cita ya está «{nombre}»"})
+
+
+def test_se_corrige_durante_7_dias_desde_que_se_marco_sin_mover_esa_hora(db, escena):
+    cita = cita_en_bd(db, escena)
+    assert asistencia(cita, "completed").status_code == 200
+
+    a_las(AHORA + timedelta(days=7))  # justo el último instante del plazo
+    response = asistencia(cita, "no_show", version=2)
+
+    assert response.status_code == 200
+    assert (response.json()["status"], response.json()["attended_at"]) == ("no_show", "2027-01-04T10:00:00-05:00")
+    a_las(AHORA + timedelta(days=7, seconds=1))
+    caducada = asistencia(cita, "completed", version=3)
+    assert (caducada.status_code, caducada.json()) == (
+        409,
+        {"detail": "Han pasado más de 7 días desde que se marcó: ya no se puede corregir"},
+    )
+
+
+def test_el_plazo_cuenta_desde_que_se_marco_no_desde_la_cita(db, escena):
+    cita = cita_en_bd(db, escena, inicio=AHORA - timedelta(days=30))
+    assert asistencia(cita, "completed").status_code == 200
+
+    a_las(AHORA + timedelta(days=2))
+
+    assert asistencia(cita, "no_show", version=2).status_code == 200
+
+
+@pytest.mark.parametrize("estado", ["scheduled", "cancelled", "realizada", "", None, 1])
+def test_estado_no_valido_422(db, escena, estado):
+    cita = cita_en_bd(db, escena)
+
+    response = asistencia(cita, estado)
+
+    assert response.status_code == 422
+    assert error_de(response, "status") == "Elige «Realizada» o «No presentado»"
+    assert db.get(Appointment, cita.id, populate_existing=True).status == "scheduled"
+
+
+@pytest.mark.parametrize("cuerpo", [{"status": "completed"}, {"version": "1", "status": "completed"},
+                                    {"version": 0, "status": "completed"}, {"version": 1}, {"version": 1, "status": "completed", "attended_at": "x"}])
+def test_cuerpo_no_valido_422(db, escena, cuerpo):
+    cita = cita_en_bd(db, escena)
+    client, csrf = sesion_de(Role.RECEPTION)
+
+    assert client.post(f"/api/appointments/{cita.id}/attendance", json=cuerpo, headers=csrf).status_code == 422
+
+
+# El estado del contacto (decisión T20b, opción a): se recalcula al marcar y al corregir.
+
+
+@pytest.mark.parametrize("origen", [ContactStatus.SCHEDULED, ContactStatus.CONTACTED, ContactStatus.LOST, ContactStatus.NEW])
+def test_la_primera_realizada_lo_hace_cliente_venga_de_donde_venga(db, escena, origen):
+    contact = con_estado(db, escena[0], origen)
+
+    assert asistencia(cita_en_bd(db, escena)).status_code == 200
+
+    assert estado_de(db, contact) == ("client", 2)
+
+
+def test_corregir_la_unica_realizada_lo_devuelve_a_contactado(db, escena):
+    contact = con_estado(db, escena[0], ContactStatus.SCHEDULED)
+    cita = cita_en_bd(db, escena)
+    assert asistencia(cita, "completed").status_code == 200
+
+    assert asistencia(cita, "no_show", version=2).status_code == 200
+
+    assert estado_de(db, contact) == ("contacted", 3)
+
+
+def test_corregirla_con_otra_programada_lo_devuelve_a_cita_agendada(db, escena):
+    contact = con_estado(db, escena[0], ContactStatus.SCHEDULED)
+    cita = cita_en_bd(db, escena)
+    cita_en_bd(db, escena, inicio=AHORA + timedelta(days=3))  # la siguiente, programada
+    assert asistencia(cita, "completed").status_code == 200
+
+    assert asistencia(cita, "no_show", version=2).status_code == 200
+
+    assert estado_de(db, contact) == ("scheduled", 3)
+
+
+def test_con_otra_realizada_de_antes_sigue_siendo_cliente(db, escena):
+    contact = con_estado(db, escena[0], ContactStatus.CLIENT)
+    cita_en_bd(db, escena, inicio=AHORA - timedelta(days=60), status="completed", attended_at=AHORA - timedelta(days=60))
+    cita = cita_en_bd(db, escena)
+    assert asistencia(cita, "completed").status_code == 200
+
+    assert asistencia(cita, "no_show", version=2).status_code == 200
+
+    assert estado_de(db, contact) == ("client", 1)  # ni cambia ni sube su versión
+
+
+def test_corregir_un_no_presentado_a_realizada_lo_hace_cliente(db, escena):
+    contact = con_estado(db, escena[0], ContactStatus.SCHEDULED)
+    cita = cita_en_bd(db, escena)
+    assert asistencia(cita, "no_show").status_code == 200
+    assert estado_de(db, contact) == ("contacted", 2)
+
+    assert asistencia(cita, "completed", version=2).status_code == 200
+
+    assert estado_de(db, contact) == ("client", 3)
+
+
+def test_no_presentado_en_la_ultima_programada_vuelve_a_contactado_como_al_cancelar(db, escena):
+    contact = con_estado(db, escena[0], ContactStatus.SCHEDULED)
+
+    assert asistencia(cita_en_bd(db, escena), "no_show").status_code == 200
+
+    assert estado_de(db, contact) == ("contacted", 2)
+
+
+def test_no_presentado_con_otra_programada_sigue_en_cita_agendada(db, escena):
+    contact = con_estado(db, escena[0], ContactStatus.SCHEDULED)
+    cita_en_bd(db, escena, inicio=AHORA + timedelta(days=3))
+
+    assert asistencia(cita_en_bd(db, escena), "no_show").status_code == 200
+
+    assert estado_de(db, contact) == ("scheduled", 1)
+
+
+@pytest.mark.parametrize("origen", [ContactStatus.LOST, ContactStatus.CONTACTED, ContactStatus.NEW])
+def test_no_presentado_no_cambia_a_nuevo_contactado_ni_perdido(db, escena, origen):
+    contact = con_estado(db, escena[0], origen)
+
+    assert asistencia(cita_en_bd(db, escena), "no_show").status_code == 200
+
+    assert estado_de(db, contact) == (origen.value, 1)
+
+
+def test_quien_editaba_la_ficha_recibe_409_tras_el_paso_a_cliente(db, escena):
+    contact = con_estado(db, escena[0], ContactStatus.SCHEDULED)
+    assert asistencia(cita_en_bd(db, escena)).status_code == 200
+    client, csrf = sesion_de(Role.RECEPTION)
+
+    response = client.put(f"/api/contacts/{contact.id}/status", json={"status": "lost", "version": 1}, headers=csrf)
+
+    assert response.status_code == 409
+
+
+def test_una_marcada_ya_no_se_reprograma_ni_cancela_y_sigue_ocupando(db, escena):
+    cita = cita_en_bd(db, escena, inicio=AHORA - timedelta(minutes=30))
+    assert asistencia(cita, "completed").status_code == 200
+    datos_cita = {"id": cita.id, "staff_id": escena[2].id, "version": 2}
+
+    assert reprogramar(datos_cita).status_code == 409
+    assert cancelar(datos_cita).status_code == 409
+
+
+def test_la_agenda_trae_la_hora_de_la_asistencia(db, escena):
+    cita = cita_en_bd(db, escena)
+    assert asistencia(cita, "completed").status_code == 200
+
+    (fila,) = agenda(date="2027-01-04").json()
+
+    assert (fila["status"], fila["attended_at"]) == ("completed", "2027-01-04T10:00:00-05:00")
+
+
+@pytest.mark.parametrize(
+    "estado, hora",
+    [("completed", None), ("no_show", None), ("scheduled", "2027-01-04 15:00+00"), ("cancelled", "2027-01-04 15:00+00")],
+)
+def test_la_bd_exige_la_hora_de_la_asistencia_solo_en_las_marcadas(db, escena, estado, hora):
+    contact, service, persona = escena
+    with pytest.raises(IntegrityError, match="ck_appointments_attended_has_time"):
+        with db.begin_nested():
+            db.execute(
+                text(
+                    "INSERT INTO appointments (contact_id, service_id, staff_id, starts_at, ends_at, duration_minutes,"
+                    " status, cancel_reason, attended_at) VALUES (:c, :s, :p, '2027-01-04 14:00+00',"
+                    " '2027-01-04 15:00+00', 60, :estado, :motivo, :hora)"
+                ),
+                {"c": contact.id, "s": service.id, "p": persona.id, "estado": estado,
+                 "motivo": "other" if estado == "cancelled" else None, "hora": hora},
+            )

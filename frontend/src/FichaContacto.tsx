@@ -38,7 +38,7 @@ export const AVISO_OTRA_VERSION =
 
 // Cambios de estado a mano (decisión T14), los mismos que permite la API: se avanza de Nuevo a
 // Contactado, Perdido vale desde cualquiera y un Perdido se reabre como Contactado. «Cita
-// agendada» la pone dar una cita (T16) y «Cliente» la pondrá marcar Realizada la primera.
+// agendada» la pone dar una cita (T16) y «Cliente», marcar Realizada la primera (T20b).
 const ACCION_CONTACTADO = { destino: "contacted", texto: "Marcar como contactado" } as const;
 const ACCION_PERDIDO = { destino: "lost", texto: "Marcar como perdido" } as const;
 export const ACCIONES_DE_ESTADO: Record<EstadoContacto, { destino: EstadoContacto; texto: string }[]> = {
@@ -335,7 +335,7 @@ function Ficha({
                 ))}
               </div>
               {(ficha.status === "new" || ficha.status === "contacted") && (
-                <p className="ayuda">Al darle una cita pasa solo a «Cita agendada»; «Cliente» llegará al marcar Realizada la primera.</p>
+                <p className="ayuda">Al darle una cita pasa solo a «Cita agendada»; a «Cliente», cuando se marque Realizada la primera.</p>
               )}
               {ficha.status === "lost" && <p className="ayuda">Para darle una cita, reábrelo primero.</p>}
             </>

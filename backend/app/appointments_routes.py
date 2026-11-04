@@ -13,11 +13,15 @@ Reprogramar y cancelar (T19): solo una cita Programada que no ha empezado, con l
 (409 si otra persona la cambió antes). Reprogramar cambia el día, la hora y la persona, con las
 mismas reglas que al crearla; el contacto y el servicio no cambian (para eso se cancela y se da
 otra). Cancelar exige un motivo de la lista y libera la franja.
+
+Asistencia (T20b): Realizada o No presentado desde la hora de inicio, por admin y recepción en
+cualquier cita y por el profesional en las suyas; se corrige durante 7 días y el estado del
+contacto se recalcula (la primera Realizada lo hace Cliente).
 """
 
 import logging
 from datetime import UTC, date, datetime, time, timedelta
-from typing import Annotated
+from typing import Annotated, Literal
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -82,6 +86,13 @@ RANGE_MISSING_MESSAGE = "Indica un día (date) o un intervalo (from y to)"
 RANGE_ORDER_MESSAGE = "El último día no puede ser anterior al primero"
 RANGE_TOO_LONG_MESSAGE = f"El intervalo no puede pasar de {MAX_RANGE_DAYS} días"
 OWN_AGENDA_MESSAGE = "Solo puedes ver tus citas"
+# Asistencia (T20b): desde que empieza la cita; se corrige durante 7 días desde que se marcó.
+ATTENDANCE_STATUSES = frozenset({AppointmentStatus.COMPLETED, AppointmentStatus.NO_SHOW})
+CORRECTION_DAYS = 7
+ATTENDANCE_STATUS_MESSAGE = "Elige «Realizada» o «No presentado»"
+NOT_STARTED_MESSAGE = "La cita aún no ha empezado: la asistencia se marca desde su hora de inicio"
+CANCELLED_ATTENDANCE_MESSAGE = "La cita está «Cancelada»: no se marca la asistencia"
+CORRECTION_EXPIRED_MESSAGE = f"Han pasado más de {CORRECTION_DAYS} días desde que se marcó: ya no se puede corregir"
 STATUS_NAMES = {
     AppointmentStatus.COMPLETED: "Realizada",
     AppointmentStatus.NO_SHOW: "No presentado",
@@ -143,6 +154,22 @@ class AppointmentCancel(BaseModel):
         return user_message(normalize_cancel_note)(value)
 
 
+class AppointmentAttendance(BaseModel):
+    """Asistencia (T20b): Realizada o No presentado, con la versión leída."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    version: StrictInt = Field(ge=1)
+    status: Literal["completed", "no_show"]
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _status(cls, value: object) -> object:
+        if value not in ATTENDANCE_STATUSES:
+            raise PydanticCustomError("dato_no_valido", ATTENDANCE_STATUS_MESSAGE)
+        return value
+
+
 class AppointmentOut(BaseModel):
     id: int
     contact_id: int
@@ -158,6 +185,8 @@ class AppointmentOut(BaseModel):
     # Solo en las canceladas (T19).
     cancel_reason: str | None
     cancel_note: str | None
+    # Cuándo se marcó la asistencia la primera vez (T20b), en la hora de la clínica.
+    attended_at: datetime | None
 
 
 class AgendaItem(AppointmentOut):
@@ -460,6 +489,103 @@ def cancel_appointment(
     return _out(appointment, zone)
 
 
+@router.post(
+    "/{appointment_id}/attendance",
+    dependencies=[Depends(require_csrf)],
+    responses={
+        404: {"description": "La cita no existe (o, para el profesional, no es suya)"},
+        409: {"description": "Otra persona la cambió antes, no ha empezado, está cancelada o el plazo de corrección pasó"},
+        422: {"description": "El estado no es Realizada ni No presentado"},
+    },
+)
+def mark_attendance(
+    appointment_id: int,
+    body: AppointmentAttendance,
+    user: User = Depends(require_roles(Role.ADMIN, Role.RECEPTION, Role.PROFESSIONAL)),
+    db: Session = Depends(get_db),
+    now: datetime = Depends(get_now),
+) -> AppointmentOut:
+    """Asistencia (T20b): Realizada o No presentado, desde la hora de inicio de la cita.
+
+    Admin y recepción, cualquier cita; el profesional, solo las suyas (las de otra persona, 404
+    como si no existieran). Se puede corregir de una a otra durante 7 días desde que se marcó.
+    El estado del contacto se recalcula en la misma transacción (`_recompute_contact`).
+    """
+    zone = get_settings().clinic_zone
+    appointment, contact = _lock_for_attendance(db, appointment_id, body, now, user)
+    if appointment.attended_at is None:
+        appointment.attended_at = now
+    appointment.status = body.status
+    appointment.version += 1
+    appointment.updated_by_id = user.id
+    db.flush()
+    _recompute_contact(db, contact, user)
+    db.commit()
+    db.refresh(appointment)
+    logger.info("Asistencia: cita id=%s %s por user_id=%s", appointment.id, appointment.status, user.id)
+    return _out(appointment, zone)
+
+
+def _lock_for_attendance(
+    db: Session, appointment_id: int, body: AppointmentAttendance, now: datetime, user: User
+) -> tuple[Appointment, Contact]:
+    """La cita y su contacto, bloqueados en el orden de siempre (contacto y después cita, T19)."""
+    row = db.execute(
+        select(Appointment.contact_id, Appointment.staff_id).where(Appointment.id == appointment_id)
+    ).one_or_none()
+    if row is None or (user.role == Role.PROFESSIONAL and row.staff_id != user.id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND_MESSAGE)
+    contact = _lock_contact(db, row.contact_id)
+    appointment = db.scalars(
+        select(Appointment)
+        .where(Appointment.id == appointment_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).one()
+    if appointment.version != body.version:
+        raise HTTPException(status.HTTP_409_CONFLICT, VERSION_CONFLICT_MESSAGE)
+    if appointment.status == AppointmentStatus.CANCELLED:
+        raise HTTPException(status.HTTP_409_CONFLICT, CANCELLED_ATTENDANCE_MESSAGE)
+    if appointment.starts_at > now:
+        raise HTTPException(status.HTTP_409_CONFLICT, NOT_STARTED_MESSAGE)
+    if appointment.status == body.status:
+        name = STATUS_NAMES[AppointmentStatus(appointment.status)]
+        raise HTTPException(status.HTTP_409_CONFLICT, f"La cita ya está «{name}»")
+    if appointment.attended_at is not None and now > appointment.attended_at + timedelta(days=CORRECTION_DAYS):
+        raise HTTPException(status.HTTP_409_CONFLICT, CORRECTION_EXPIRED_MESSAGE)
+    return appointment, contact
+
+
+def _recompute_contact(db: Session, contact: Contact, user: User) -> None:
+    """El estado del contacto tras marcar o corregir la asistencia (decisiones T20b).
+
+    - Con alguna Realizada es Cliente (la primera lo convierte; un Perdido que viene, también).
+    - Si era Cliente y ya no le queda ninguna Realizada (se corrigió a No presentado): vuelve a
+      «Cita agendada» si le queda alguna Programada, o a Contactado si no.
+    - Si estaba en «Cita agendada» y no le queda ninguna Programada (No presentado en la
+      última): Contactado, como al cancelar (T19).
+    El contacto está bloqueado: nadie le da otra cita ni marca otra mientras se cuenta.
+    """
+
+    def count(state: AppointmentStatus) -> int:
+        return db.scalar(
+            select(func.count())
+            .select_from(Appointment)
+            .where(Appointment.contact_id == contact.id, Appointment.status == state)
+        )
+
+    if count(AppointmentStatus.COMPLETED):
+        target = ContactStatus.CLIENT
+    elif contact.status in (ContactStatus.CLIENT, ContactStatus.SCHEDULED):
+        target = ContactStatus.SCHEDULED if count(AppointmentStatus.SCHEDULED) else ContactStatus.CONTACTED
+    else:
+        return  # Nuevo, Contactado o Perdido con un No presentado: no cambia
+    if contact.status != target:
+        contact.status = target
+        contact.version += 1
+        contact.updated_by_id = user.id
+
+
 def _start_instant(local: datetime, zone: ZoneInfo, now: datetime) -> datetime:
     """La hora local de inicio como instante, desde ahora y como mucho dentro de 365 días (T16)."""
     try:
@@ -547,4 +673,5 @@ def _out(appointment: Appointment, zone: ZoneInfo) -> AppointmentOut:
         created_at=appointment.created_at.astimezone(zone),
         cancel_reason=appointment.cancel_reason,
         cancel_note=appointment.cancel_note,
+        attended_at=appointment.attended_at.astimezone(zone) if appointment.attended_at else None,
     )

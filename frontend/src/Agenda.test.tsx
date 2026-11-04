@@ -1,5 +1,5 @@
-// Pruebas de la agenda y del formulario de cita (T18), de reprogramar y cancelar (T19) y de la vista del mes y
-// «Mi agenda» del profesional (T20), con una API falsa en fetch.
+// Pruebas de la agenda y del formulario de cita (T18), de reprogramar y cancelar (T19), de la vista del mes y
+// «Mi agenda» del profesional (T20) y de la asistencia (T20b), con una API falsa en fetch.
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -17,6 +17,8 @@ import {
   primeroDeMes,
   resumenPorServicio,
   sePuedeCambiar,
+  sePuedeCorregir,
+  sePuedeMarcar,
   sumarDias,
   sumarMeses,
   ultimoDeMes,
@@ -68,6 +70,7 @@ function cita(id: number, inicio: string, fin: string, cambios: Partial<CitaAgen
     created_at: "2027-01-04T15:00:00-05:00",
     cancel_reason: null,
     cancel_note: null,
+    attended_at: null,
     contact_name: "Ana Lopez",
     service_name: "Botox",
     staff_email: P_PRO.email,
@@ -992,5 +995,146 @@ describe("fechas del mes", () => {
       { servicio: "Acne", total: 1 },
       { servicio: "Botox", total: 1 },
     ]);
+  });
+});
+
+// --- Asistencia (T20b) -----------------------------------------------------------------------------
+
+// «Ahora» en el navegador: 11/01/2027 a las 12:00 de Nueva York. La de Ana (9:30) ya empezó; la de
+// Bea (23:30), no. Solo se finge la fecha: los temporizadores siguen siendo los reales.
+const MEDIODIA = new Date("2027-01-11T17:00:00Z");
+const asistencias = () => llamadas.filter((l) => l.metodo === "POST" && l.ruta.endsWith("/attendance"));
+
+describe("asistencia", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"], shouldAdvanceTime: true });
+    vi.setSystemTime(MEDIODIA);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("la que ya empezó tiene «Realizada» y «No presentado»; la que no, reprogramar y cancelar", async () => {
+    abrir();
+
+    const ana = await fila("Ana Lopez");
+    expect(ana.getAllByRole("button").map((b) => b.textContent)).toEqual(["Realizada", "No presentado"]);
+    const bea = await fila("Bea Ruiz");
+    expect(bea.getAllByRole("button").map((b) => b.textContent)).toEqual(["Reprogramar", "Cancelar cita"]);
+  });
+
+  it("«Realizada» envía el estado y la versión, avisa y recarga la agenda", async () => {
+    rutas["POST /api/appointments/1/attendance"] = () => ({
+      status: 200,
+      cuerpo: { ...DE_ANA, status: "completed", attended_at: "2027-01-11T12:00:00-05:00", version: 2 },
+    });
+    const u = abrir();
+
+    await u.click((await fila("Ana Lopez")).getByRole("button", { name: /^Realizada/ }));
+
+    expect((await screen.findByRole("status")).textContent).toBe("Asistencia: Ana Lopez, 9:30–10:30, «Realizada»");
+    expect(asistencias()[0].cuerpo).toEqual({ version: 1, status: "completed" });
+    expect(asistencias()[0].headers["X-CSRF-Token"]).toBe("csrf-recepcion");
+    await waitFor(() => expect(diasPedidos().filter((d) => d === "2027-01-11").length).toBeGreaterThan(1));
+  });
+
+  it("«No presentado» envía no_show", async () => {
+    rutas["POST /api/appointments/1/attendance"] = () => ({ status: 200, cuerpo: { ...DE_ANA, status: "no_show" } });
+    const u = abrir();
+
+    await u.click((await fila("Ana Lopez")).getByRole("button", { name: /^No presentado/ }));
+
+    await screen.findByText(/«No presentado»/);
+    expect(asistencias()[0].cuerpo).toEqual({ version: 1, status: "no_show" });
+  });
+
+  it("una marcada dice su estado y, dentro del plazo, se puede cambiar a la otra", async () => {
+    rutas["GET /api/appointments"] = agendaFalsa([
+      { ...DE_ANA, status: "completed", version: 2, attended_at: "2027-01-10T12:00:00-05:00" },
+      { ...DE_BEA, starts_at: "2027-01-11T08:00:00-05:00", ends_at: "2027-01-11T09:00:00-05:00", status: "no_show", attended_at: "2027-01-11T09:00:00-05:00" },
+    ]);
+    rutas["POST /api/appointments/1/attendance"] = () => ({ status: 200, cuerpo: { ...DE_ANA, status: "no_show" } });
+    const u = abrir();
+
+    const ana = await fila("Ana Lopez");
+    expect(ana.getByText(/Realizada$/)).toBeTruthy();
+    expect(ana.getAllByRole("button").map((b) => b.textContent)).toEqual(["Cambiar a No presentado"]);
+    expect((await fila("Bea Ruiz")).getAllByRole("button").map((b) => b.textContent)).toEqual(["Cambiar a Realizada"]);
+
+    await u.click(ana.getByRole("button", { name: /^Cambiar a No presentado/ }));
+
+    await screen.findByText(/«No presentado»/);
+    expect(asistencias()[0].cuerpo).toEqual({ version: 2, status: "no_show" });
+  });
+
+  it("pasado el plazo de 7 días desde que se marcó, ya no hay botón", async () => {
+    rutas["GET /api/appointments"] = agendaFalsa([{ ...DE_ANA, status: "completed", attended_at: "2027-01-04T11:59:00-05:00" }]);
+    abrir();
+
+    expect((await fila("Ana Lopez")).queryAllByRole("button")).toEqual([]);
+  });
+
+  it("una cancelada que ya pasó no tiene botones", async () => {
+    rutas["GET /api/appointments"] = agendaFalsa([{ ...DE_ANA, status: "cancelled", cancel_reason: "clinic" }]);
+    abrir();
+
+    expect((await fila("Ana Lopez")).queryAllByRole("button")).toEqual([]);
+  });
+
+  it("si otra persona la marcó antes (409), avisa y recarga", async () => {
+    rutas["POST /api/appointments/1/attendance"] = () => ({
+      status: 409,
+      cuerpo: { detail: "Esta cita ha cambiado desde que la abriste. Revisa los datos y vuelve a intentarlo." },
+    });
+    const u = abrir();
+    await filas();
+    const pedidasAntes = diasPedidos().length;
+
+    await u.click((await fila("Ana Lopez")).getByRole("button", { name: /^Realizada/ }));
+
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Esta cita ha cambiado desde que la abriste. Revisa los datos y vuelve a intentarlo.",
+    );
+    await waitFor(() => expect(diasPedidos().length).toBeGreaterThan(pedidasAntes));
+  });
+
+  it("también desde la vista del mes", async () => {
+    abrir("/agenda?vista=mes&fecha=2027-01-11");
+
+    expect((await fila("Ana Lopez")).getAllByRole("button").map((b) => b.textContent)).toEqual(["Realizada", "No presentado"]);
+  });
+
+  it("la profesional marca las suyas en «Mi agenda», sin reprogramar ni cancelar", async () => {
+    rutas["GET /api/auth/me"] = () => ({ status: 200, cuerpo: PROFESIONAL });
+    rutas["GET /api/appointments"] = agendaFalsa([DE_ANA, { ...DE_BEA, staff_id: 3 }]);
+    rutas["POST /api/appointments/1/attendance"] = () => ({ status: 200, cuerpo: { ...DE_ANA, status: "completed" } });
+    const u = abrir("/mi-agenda?fecha=2027-01-11");
+
+    expect((await fila("Ana Lopez")).getAllByRole("button").map((b) => b.textContent)).toEqual(["Realizada", "No presentado"]);
+    expect((await fila("Bea Ruiz")).queryAllByRole("button")).toEqual([]); // aún no ha empezado
+
+    await u.click((await fila("Ana Lopez")).getByRole("button", { name: /^Realizada/ }));
+
+    await screen.findByText(/«Realizada»/);
+    expect(asistencias()[0].headers["X-CSRF-Token"]).toBe("csrf-pro");
+  });
+});
+
+describe("cuándo se marca y se corrige", () => {
+  const ana = (cambios: Partial<CitaAgenda>) => ({ ...DE_ANA, ...cambios });
+
+  it("se marca desde la hora de inicio, no antes", () => {
+    expect(sePuedeMarcar(DE_ANA, new Date("2027-01-11T14:30:00Z"))).toBe(true); // justo a las 9:30
+    expect(sePuedeMarcar(DE_ANA, new Date("2027-01-11T14:29:59Z"))).toBe(false);
+    expect(sePuedeMarcar(ana({ status: "cancelled" }), MEDIODIA)).toBe(false);
+    expect(sePuedeMarcar(ana({ status: "completed" }), MEDIODIA)).toBe(false);
+  });
+
+  it("se corrige hasta 7 días después de marcarla, contados desde la marca", () => {
+    const marcada = ana({ status: "no_show", attended_at: "2027-01-11T15:00:00Z" });
+    expect(sePuedeCorregir(marcada, new Date("2027-01-18T15:00:00Z"))).toBe(true);
+    expect(sePuedeCorregir(marcada, new Date("2027-01-18T15:00:01Z"))).toBe(false);
+    expect(sePuedeCorregir(ana({ status: "completed", attended_at: null }), MEDIODIA)).toBe(false);
+    expect(sePuedeCorregir(ana({ status: "scheduled", attended_at: "2027-01-11T15:00:00Z" }), MEDIODIA)).toBe(false);
   });
 });

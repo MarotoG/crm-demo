@@ -228,7 +228,7 @@ class AppointmentStatus(StrEnum):
     """Estados de una cita (T03): Programada, Realizada, No presentado, Cancelada.
 
     Toda cita nace «scheduled» (T16). Solo «cancelled» libera la franja (T17); marcar
-    «completed» la primera cita pasará el contacto a Cliente (llegará con la asistencia).
+    «completed» la primera cita pasa el contacto a Cliente (asistencia, T20b).
     """
 
     SCHEDULED = "scheduled"
@@ -274,6 +274,8 @@ class Appointment(Base):
         CheckConstraint("cancel_note IS NULL OR cancel_reason IS NOT NULL", name="cancel_note_with_reason"),
         CheckConstraint(_name_normalized("cancel_note"), name="cancel_note_normalized"),
         CheckConstraint(f"cancel_note ~ '^[ -~]{{1,{MAX_CANCEL_NOTE_LENGTH}}}$'", name="cancel_note_ascii"),
+        # Asistencia (T20b): Realizada o No presentado si y solo si se sabe cuándo se marcó.
+        CheckConstraint("(status IN ('completed', 'no_show')) = (attended_at IS NOT NULL)", name="attended_has_time"),
         # La agenda de cada persona por fecha (T18).
         Index("ix_appointments_staff_id_starts_at", "staff_id", "starts_at"),
         # Solapamientos (T17): la misma persona no puede tener dos citas que se pisen. Intervalo
@@ -314,3 +316,5 @@ class Appointment(Base):
     # Al cancelar (T19): el motivo de la lista y, si se quiere, un detalle corto.
     cancel_reason: Mapped[str | None] = mapped_column(String(20))
     cancel_note: Mapped[str | None] = mapped_column(String(MAX_CANCEL_NOTE_LENGTH))
+    # Al marcar la asistencia (T20b), la primera vez; corregirla no la cambia (plazo de 7 días).
+    attended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

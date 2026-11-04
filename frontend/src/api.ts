@@ -318,6 +318,8 @@ export type CitaAgenda = {
   /** Solo en las canceladas (T19). */
   cancel_reason: MotivoCancelacion | null;
   cancel_note: string | null;
+  /** Cuándo se marcó la asistencia la primera vez (T20b); null si no está marcada. */
+  attended_at: string | null;
   contact_name: string;
   service_name: string;
   staff_email: string;
@@ -364,4 +366,17 @@ export function cancelarCita(
   csrf: string,
 ): Promise<Omit<CitaAgenda, "contact_name" | "service_name" | "staff_email">> {
   return peticion(`/api/appointments/${id}/cancel`, { method: "POST", cuerpo: datos, csrf });
+}
+
+export type Asistencia = "completed" | "no_show";
+
+/** Asistencia (T20b): desde la hora de inicio; se corrige durante 7 días desde que se marcó. 409
+ * si otra persona la cambió, no ha empezado, está cancelada o pasó el plazo. El profesional, solo
+ * las suyas (404 en las demás). */
+export function marcarAsistencia(
+  id: number,
+  datos: { version: number; status: Asistencia },
+  csrf: string,
+): Promise<Omit<CitaAgenda, "contact_name" | "service_name" | "staff_email">> {
+  return peticion(`/api/appointments/${id}/attendance`, { method: "POST", cuerpo: datos, csrf });
 }

@@ -16,7 +16,10 @@
 // Vista del mes (T20, ?vista=mes): todas las citas del mes agrupadas por día, con cuántas
 // Programadas hay de cada servicio (para preparar el material) y los mismos botones, sin ir día a
 // día. «Mi agenda» del profesional (/mi-agenda) es esta misma agenda en solo lectura: la API le
-// devuelve solo sus citas, y aquí no hay formulario, filtro por persona ni botones.
+// devuelve solo sus citas, y aquí no hay formulario, filtro por persona ni reprogramar o cancelar.
+//
+// Asistencia (T20b): en las citas que ya han empezado, «Realizada» y «No presentado» (también en
+// «Mi agenda», para las suyas); durante 7 días desde que se marcó, el botón para corregirla.
 
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router";
@@ -30,8 +33,10 @@ import {
   listarContactos,
   listarPersonasAsignables,
   listarServicios,
+  marcarAsistencia,
   obtenerContacto,
   reprogramarCita,
+  type Asistencia,
   type CitaAgenda,
   type Contacto,
   type EstadoCita,
@@ -60,6 +65,20 @@ export const NOMBRE_MOTIVO: Record<MotivoCancelacion, string> = {
 /** Solo se reprograma o cancela una cita Programada que todavía no ha empezado (decisión T19). */
 export function sePuedeCambiar(cita: CitaAgenda, ahora: Date = new Date()): boolean {
   return cita.status === "scheduled" && new Date(cita.starts_at).getTime() > ahora.getTime();
+}
+
+// Asistencia (T20b): se marca desde la hora de inicio y se corrige durante 7 días desde que se marcó.
+const PLAZO_CORRECCION_MS = 7 * 86_400_000;
+
+/** Una Programada que ya ha empezado: se marca Realizada o No presentado. */
+export function sePuedeMarcar(cita: CitaAgenda, ahora: Date = new Date()): boolean {
+  return cita.status === "scheduled" && new Date(cita.starts_at).getTime() <= ahora.getTime();
+}
+
+/** Una ya marcada, dentro del plazo: se cambia a la otra. */
+export function sePuedeCorregir(cita: CitaAgenda, ahora: Date = new Date()): boolean {
+  if ((cita.status !== "completed" && cita.status !== "no_show") || cita.attended_at === null) return false;
+  return ahora.getTime() <= new Date(cita.attended_at).getTime() + PLAZO_CORRECCION_MS;
 }
 
 // --- Fechas y horas en la zona de la clínica ---------------------------------------
@@ -185,7 +204,8 @@ function mensajeDe(error: unknown): string {
 }
 
 /** La agenda de la clínica (admin y recepción, /agenda) o, con `propia`, «Mi agenda» del
- * profesional (/mi-agenda, T20): solo sus citas, que filtra la API, y sin botones. */
+ * profesional (/mi-agenda, T20): solo sus citas, que filtra la API, sin dar, reprogramar ni cancelar
+ * citas; sí marca su asistencia (T20b). */
 export default function Agenda({ propia = false }: { propia?: boolean }) {
   const { estado, caducada } = useSesion();
   const [parametros, setParametros] = useSearchParams();
@@ -324,6 +344,23 @@ export default function Agenda({ propia = false }: { propia?: boolean }) {
               setRecarga((n) => n + 1);
             }}
             alVolver={() => setCancelando(null)}
+          />
+        )}
+        {(sePuedeMarcar(c) || sePuedeCorregir(c)) && (
+          // También en «Mi agenda»: el profesional marca las suyas (T20b).
+          <BotonesAsistencia
+            cita={c}
+            dia={diaDeLaFila}
+            alTerminar={(texto) => {
+              limpiarMensajes();
+              setCreada(texto);
+              setRecarga((n) => n + 1);
+            }}
+            alConflicto={(texto) => {
+              limpiarMensajes();
+              setAviso(texto);
+              setRecarga((n) => n + 1);
+            }}
           />
         )}
       </li>
@@ -928,6 +965,76 @@ function FormularioCita({
         </button>
       </div>
     </form>
+  );
+}
+
+// --- Asistencia (T20b) ---------------------------------------------------------------------------
+
+/** «Realizada» y «No presentado» en una cita que ha empezado; en una ya marcada y dentro del
+ * plazo, el botón para cambiarla a la otra. Sin confirmación: un error se corrige así. */
+function BotonesAsistencia({
+  cita,
+  dia,
+  alTerminar,
+  alConflicto,
+}: {
+  cita: CitaAgenda;
+  dia: string;
+  alTerminar: (texto: string) => void;
+  alConflicto: (texto: string) => void;
+}) {
+  const { estado, caducada } = useSesion();
+  const [guardando, setGuardando] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (estado.tipo !== "dentro") return null;
+  const csrf = estado.usuario.csrf_token;
+
+  async function marcar(destino: Asistencia) {
+    setGuardando(true);
+    setError(null);
+    try {
+      await marcarAsistencia(cita.id, { version: cita.version, status: destino }, csrf);
+      alTerminar(`Asistencia: ${cita.contact_name}, ${tramo(dia, cita)}, «${NOMBRE_ESTADO_CITA[destino]}»`);
+    } catch (e) {
+      setGuardando(false);
+      if (!(e instanceof ErrorApi)) return setError("Error inesperado");
+      if (e.status === 401) return caducada();
+      // Otra persona la cambió, pasó el plazo o ya no es suya: se avisa y la lista se recarga.
+      if (e.status === 409) return alConflicto(e.message);
+      if (e.status === 404) return alConflicto("Esta cita ya no existe");
+      setError(e.message);
+    }
+  }
+
+  const quien = `${cita.contact_name}, ${tramo(dia, cita)}`;
+  const opciones: { destino: Asistencia; texto: string }[] =
+    cita.status === "scheduled"
+      ? [
+          { destino: "completed", texto: "Realizada" },
+          { destino: "no_show", texto: "No presentado" },
+        ]
+      : [cita.status === "completed" ? { destino: "no_show", texto: "Cambiar a No presentado" } : { destino: "completed", texto: "Cambiar a Realizada" }];
+
+  return (
+    <span className="cita__acciones">
+      {opciones.map(({ destino, texto }) => (
+        <button
+          key={destino}
+          type="button"
+          className="secundario"
+          aria-label={`${texto}: ${quien}`}
+          disabled={guardando}
+          onClick={() => marcar(destino)}
+        >
+          {texto}
+        </button>
+      ))}
+      {error && (
+        <span className="error" role="alert">
+          {error}
+        </span>
+      )}
+    </span>
   );
 }
 
