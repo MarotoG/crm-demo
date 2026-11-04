@@ -60,9 +60,7 @@ def check_passwords(passwords: DemoPasswords) -> list[str]:
 def demo_contact_id(session: Session) -> int:
     """El contacto ficticio de la cuenta de cliente (T21): lo crea si falta."""
     email = DEMO_EMAILS[Role.CLIENT]
-    contact_id = session.scalar(
-        select(Contact.id).where(Contact.first_name == "Demo", Contact.last_name == "Cliente", Contact.email == email)
-    )
+    contact_id = session.scalar(select(Contact.id).where(Contact.email == email))
     if contact_id is not None:
         return contact_id
     contact = Contact(first_name="Demo", last_name="Cliente", email=email, source=ContactSource.OTHER)

@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, func, select, text, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DataError, IntegrityError
 
 from app import appointments_routes
 from app.appointments_routes import get_now
@@ -123,6 +123,7 @@ def test_admin_y_recepcion_crean_una_cita(db, usuarios, escena, role):
         "cancel_reason": None,
         "cancel_note": None,
         "attended_at": None,
+        "note": None,
     }
     guardada = db.get(Appointment, cita["id"])
     # En la BD, el instante: 9:30 en Nueva York son las 14:30 UTC.
@@ -1679,3 +1680,127 @@ def test_la_bd_exige_la_hora_de_la_asistencia_solo_en_las_marcadas(db, escena, e
                 {"c": contact.id, "s": service.id, "p": persona.id, "estado": estado,
                  "motivo": "other" if estado == "cancelled" else None, "hora": hora},
             )
+
+
+# --- Nota de la cita (T21b) -------------------------------------------------------
+
+
+def editar_nota(cita_id: int, nota, version: int = 1, role: Role = Role.RECEPTION):
+    client, csrf = sesion_de(role)
+    return client.put(f"/api/appointments/{cita_id}/note", json={"note": nota, "version": version}, headers=csrf)
+
+
+def test_la_nota_se_guarda_al_crear_normalizada(db, usuarios, escena):
+    response = crear(datos(escena, note="  Para su hijo Leo,   12 anos "))
+
+    assert response.status_code == 201
+    assert response.json()["note"] == "Para su hijo Leo, 12 anos"
+
+
+def test_la_nota_es_opcional(db, usuarios, escena):
+    assert crear(datos(escena)).json()["note"] is None
+    assert crear(datos(escena, starts_at="2027-01-11T11:00", note="  ")).json()["note"] is None
+
+
+@pytest.mark.parametrize(
+    "nota, mensaje",
+    [
+        ("x" * 201, "La nota no puede tener más de 200 caracteres"),
+        ("Ni\u00f1o", "No se permiten tildes ni caracteres especiales (á, ñ, ü…)"),
+        (5, "La nota debe ser texto"),
+    ],
+    ids=["larga", "con eñe", "no es texto"],
+)
+def test_nota_no_valida_422(db, usuarios, escena, nota, mensaje):
+    cita = crear(datos(escena)).json()
+
+    for response in (crear(datos(escena, starts_at="2027-01-11T11:00", note=nota)), editar_nota(cita["id"], nota)):
+        assert response.status_code == 422
+        assert error_de(response, "note") == mensaje
+
+
+@pytest.mark.parametrize("role", [Role.ADMIN, Role.RECEPTION])
+def test_editar_la_nota_no_toca_nada_mas(db, usuarios, escena, role):
+    cita = crear(datos(escena)).json()
+
+    response = editar_nota(cita["id"], " Para Leo ", role=role)
+
+    assert response.status_code == 200
+    cambiada = response.json()
+    assert cambiada["note"] == "Para Leo" and cambiada["version"] == 2
+    assert cambiada | {"note": None, "version": 1} == cita
+    assert db.get(Appointment, cita["id"], populate_existing=True).updated_by_id == usuarios[role].id
+
+
+def test_quitar_la_nota(db, usuarios, escena):
+    cita = crear(datos(escena, note="Para Leo")).json()
+
+    assert editar_nota(cita["id"], None).json()["note"] is None
+
+
+@pytest.mark.parametrize("role", [Role.PROFESSIONAL, Role.CLIENT])
+def test_profesional_y_cliente_no_editan_la_nota(db, usuarios, escena, role):
+    cita = crear(datos(escena, note="Para Leo")).json()
+
+    assert editar_nota(cita["id"], "otra", role=role).status_code == 403
+    assert db.get(Appointment, cita["id"], populate_existing=True).note == "Para Leo"
+
+
+def test_editar_la_nota_exige_csrf(db, usuarios, escena):
+    cita = crear(datos(escena)).json()
+    client, _ = sesion_de(Role.RECEPTION)
+
+    assert client.put(f"/api/appointments/{cita['id']}/note", json={"note": "x", "version": 1}).status_code == 403
+
+
+def test_editar_la_nota_con_una_version_antigua_409(db, usuarios, escena):
+    cita = crear(datos(escena)).json()
+    assert editar_nota(cita["id"], "primera").status_code == 200
+
+    response = editar_nota(cita["id"], "segunda")
+
+    assert response.status_code == 409
+    assert db.get(Appointment, cita["id"], populate_existing=True).note == "primera"
+
+
+def test_editar_la_nota_de_una_cita_inexistente_404(db, usuarios):
+    assert editar_nota(999999, "x").status_code == 404
+
+
+@pytest.mark.parametrize("estado", ["completed", "no_show", "cancelled"])
+def test_la_nota_se_edita_en_cualquier_estado(db, usuarios, escena, estado):
+    cita = crear(datos(escena)).json()
+    db.execute(
+        update(Appointment)
+        .where(Appointment.id == cita["id"])
+        .values(status=estado, attended_at=None if estado == "cancelled" else AHORA, cancel_reason="clinic" if estado == "cancelled" else None)
+    )
+
+    response = editar_nota(cita["id"], "Para Leo")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == estado
+
+
+def test_el_profesional_ve_la_nota_de_sus_citas_y_no_las_de_otra_persona(db, usuarios, escena):
+    contact, _, persona = escena
+    otra = cuenta(db, "otra@prueba.example.com", Role.PROFESSIONAL)
+    servicio_otra = servicio(db, [otra], nombre="Peel")
+    crear(datos(escena, note="Para Leo"))
+    crear(datos((contact, servicio_otra, otra), note="Nota ajena"))
+    client, _ = sesion_de(Role.PROFESSIONAL)
+
+    agenda = client.get("/api/appointments", params={"date": "2027-01-11"}).json()
+    ficha = client.get(f"/api/appointments/by-contact/{contact.id}").json()["items"]
+
+    assert [c["note"] for c in agenda] == ["Para Leo"]
+    assert [c["note"] for c in ficha] == ["Para Leo"]
+    assert persona.id == agenda[0]["staff_id"]
+
+
+def test_la_bd_rechaza_una_nota_de_cita_que_salte_la_api(db, usuarios, escena):
+    cita = crear(datos(escena)).json()
+
+    for nota in ("", " x", "Ni\u00f1o", "x" * 201):
+        with pytest.raises((IntegrityError, DataError)), db.begin_nested():
+            db.execute(update(Appointment).where(Appointment.id == cita["id"]).values(note=nota))

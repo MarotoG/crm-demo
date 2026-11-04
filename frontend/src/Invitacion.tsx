@@ -1,6 +1,6 @@
-// Página pública de la invitación al portal (T21): /invitacion#<token>. El cliente elige su email y
-// su contraseña, y después entra por el login como cualquiera. No muestra datos del contacto: un
-// enlace reenviado no descubre a quién pertenece.
+// Página pública de la invitación al portal (T21): /invitacion#<token>. El cliente ve con qué email
+// entrará (el de su ficha, T21b), elige su contraseña y después entra por el login como cualquiera.
+// Es el único dato de la ficha que se muestra: si está mal, el cliente avisa a la clínica antes.
 
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
@@ -11,7 +11,11 @@ import { useSesion } from "./sesion";
 export const ENLACE_NO_VALIDO = "Este enlace no es válido o ha caducado. Pide uno nuevo a la clínica.";
 export const CUENTA_CREADA = "Cuenta creada. Entra con tu email y tu contraseña.";
 
-type Estado = { tipo: "comprobando" } | { tipo: "no-valido" } | { tipo: "error"; mensaje: string } | { tipo: "valido" };
+type Estado =
+  | { tipo: "comprobando" }
+  | { tipo: "no-valido" }
+  | { tipo: "error"; mensaje: string }
+  | { tipo: "valido"; email: string };
 
 export default function Invitacion() {
   const { estado: sesion, salir } = useSesion();
@@ -26,7 +30,7 @@ export default function Invitacion() {
     let vigente = true;
     setEstado({ tipo: "comprobando" });
     comprobarInvitacion(token)
-      .then(() => vigente && setEstado({ tipo: "valido" }))
+      .then(({ email }) => vigente && setEstado({ tipo: "valido", email }))
       .catch((e: unknown) => {
         if (!vigente) return;
         // Un token mal formado (422) tampoco es un enlace válido.
@@ -87,16 +91,15 @@ export default function Invitacion() {
           </>
         )}
         {estado.tipo === "valido" && sesion.tipo === "fuera" && (
-          <Formulario token={token} alCaducar={() => setEstado({ tipo: "no-valido" })} />
+          <Formulario token={token} email={estado.email} alCaducar={() => setEstado({ tipo: "no-valido" })} />
         )}
       </section>
     </main>
   );
 }
 
-function Formulario({ token, alCaducar }: { token: string; alCaducar: () => void }) {
+function Formulario({ token, email, alCaducar }: { token: string; email: string; alCaducar: () => void }) {
   const navegar = useNavigate();
-  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [repetida, setRepetida] = useState("");
   const [enviando, setEnviando] = useState(false);
@@ -110,12 +113,11 @@ function Formulario({ token, alCaducar }: { token: string; alCaducar: () => void
     setCampos({});
     setEnviando(true);
     try {
-      await aceptarInvitacion({ token, email, password });
+      await aceptarInvitacion({ token, password });
       navegar("/login", { replace: true, state: { aviso: CUENTA_CREADA } });
     } catch (e) {
       setEnviando(false);
       if (e instanceof ErrorApi && e.status === 410) return alCaducar();
-      if (e instanceof ErrorApi && e.status === 409) return setCampos({ email: e.message });
       if (e instanceof ErrorApi && e.status === 422 && Object.keys(e.campos).length > 0) return setCampos(e.campos);
       setError(e instanceof ErrorApi ? e.message : "Error inesperado");
     }
@@ -126,19 +128,11 @@ function Formulario({ token, alCaducar }: { token: string; alCaducar: () => void
       <p className="ayuda">
         Con esta cuenta podrás consultar tus citas. Si ya la creaste, <Link to="/login">entra aquí</Link>.
       </p>
-      <Campo id="invitacion-email" etiqueta="Email" error={campos.email}>
-        <input
-          id="invitacion-email"
-          type="email"
-          autoComplete="username"
-          required
-          maxLength={254}
-          value={email}
-          aria-invalid={campos.email ? true : undefined}
-          aria-describedby={campos.email ? "invitacion-email-error" : undefined}
-          onChange={(e) => setEmail(e.target.value)}
-        />
-      </Campo>
+      <p>
+        Entrarás con <strong>{email}</strong>. Si no es tu email, avisa a la clínica antes de continuar.
+      </p>
+      {/* Para que el gestor de contraseñas guarde la nueva junto a este email. */}
+      <input type="hidden" autoComplete="username" value={email} />
       <Campo id="invitacion-password" etiqueta="Contraseña (al menos 12 caracteres)" error={campos.password}>
         <input
           id="invitacion-password"

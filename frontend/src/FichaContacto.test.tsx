@@ -29,6 +29,7 @@ const ANA: ContactoDetalle = {
   version: 1,
   created_by_email: "recepcion@prueba.example.com",
   updated_by_email: null,
+  note: null,
   owner_id: 2,
   owner_email: "recepcion@prueba.example.com",
 };
@@ -185,7 +186,7 @@ describe("editar", () => {
     await u.click(await screen.findByRole("button", { name: "Editar" }));
 
     expect((await screen.findByLabelText("Nombre") as HTMLInputElement).value).toBe("Ana");
-    expect((screen.getByLabelText("Teléfono") as HTMLInputElement).value).toBe("(212) 555-0123");
+    expect((screen.getByLabelText("Teléfono (opcional)") as HTMLInputElement).value).toBe("(212) 555-0123");
     expect((screen.getByLabelText("Origen") as HTMLSelectElement).value).toBe("instagram");
     await u.clear(screen.getByLabelText("Apellidos"));
     await u.type(screen.getByLabelText("Apellidos"), "Smyth");
@@ -203,8 +204,48 @@ describe("editar", () => {
       phone: "(212) 555-0123",
       source: "instagram",
       owner_id: 2,
+      note: "",
       version: 1,
     });
+  });
+
+  it("la nota se ve en la ficha, sale en el formulario y se envía al guardar (T21b)", async () => {
+    rutas["GET /api/contacts/7"] = () => ({ status: 200, cuerpo: { ...ANA, note: "Instagram: @ana" } });
+    rutas["PUT /api/contacts/7"] = () => ({ status: 200, cuerpo: { ...ANA, note: "Instagram: @ana2", version: 2 } });
+    const u = abrir("/contactos/7");
+
+    await screen.findByRole("heading", { name: "Ana Smith" });
+    expect(dato("Nota")).toBe("Instagram: @ana");
+
+    await u.click(screen.getByRole("button", { name: "Editar" }));
+    const nota = (await screen.findByLabelText("Nota (opcional)")) as HTMLInputElement;
+    expect(nota.value).toBe("Instagram: @ana");
+    expect(screen.getByText(/No escribas datos clínicos/)).toBeTruthy();
+    await u.clear(nota);
+    await u.type(nota, "Instagram: @ana2");
+    await u.click(screen.getByRole("button", { name: "Guardar cambios" }));
+
+    await screen.findByText("Cambios guardados");
+    expect((puts()[0].cuerpo as { note: string }).note).toBe("Instagram: @ana2");
+    expect(dato("Nota")).toBe("Instagram: @ana2");
+  });
+
+  it("sin nota no aparece esa fila", async () => {
+    abrir("/contactos/7");
+
+    await screen.findByRole("heading", { name: "Ana Smith" });
+    expect(screen.queryByText("Nota", { selector: "dt" })).toBeNull();
+  });
+
+  it("una nota con tilde se avisa sin llamar a la API", async () => {
+    const u = abrir("/contactos/7");
+
+    await u.click(await screen.findByRole("button", { name: "Editar" }));
+    await u.type(await screen.findByLabelText("Nota (opcional)"), "niño");
+
+    expect(screen.getByLabelText("Nota (opcional)").getAttribute("aria-invalid")).toBe("true");
+    await u.click(screen.getByRole("button", { name: "Guardar cambios" }));
+    expect(puts()).toHaveLength(0);
   });
 
   it("si otra persona guardó antes (409 y versión nueva), muestra la ficha actual con un aviso", async () => {

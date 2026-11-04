@@ -14,6 +14,11 @@ PASSWORD = "contraseña-de-prueba-larga"
 ANA = {"first_name": "Ana", "last_name": "Smith", "email": "ana@clinica.example.com", "source": "instagram"}
 
 
+def otra(nombre: str, **cambios) -> dict:
+    """Otra persona: en T21b cada una tiene su propio email."""
+    return {**ANA, "first_name": nombre, "email": f"{nombre.lower()}@clinica.example.com", **cambios}
+
+
 @pytest.fixture
 def usuarios(db) -> dict[Role, User]:
     creados = {}
@@ -91,19 +96,27 @@ def test_sin_sesion_401_aunque_los_datos_sean_invalidos(db):
 # --- Datos no válidos -------------------------------------------------------------
 
 
-def test_sin_email_ni_telefono_422(usuarios, db):
-    response = crear({**ANA, "email": "  ", "phone": ""})
+def test_sin_email_422_aunque_tenga_telefono(usuarios, db):
+    response = crear({**ANA, "email": "  ", "phone": "(212) 555-0123"})
 
     assert response.status_code == 422
-    assert "Indica al menos un email o un teléfono" in mensajes(response)
+    assert "Indica el email" in mensajes(response)
     assert contar(db) == 0
 
 
-def test_basta_con_el_telefono(usuarios, db):
-    response = crear({"first_name": "Ana", "last_name": "Smith", "phone": "+34 612 345 678", "source": "referral"})
+@pytest.mark.parametrize("cuerpo", [{"email": None}, {}], ids=["null", "sin el campo"])
+def test_el_email_no_se_puede_omitir(usuarios, db, cuerpo):
+    datos = {k: v for k, v in ANA.items() if k != "email"} | cuerpo
+
+    assert crear(datos).status_code == 422
+    assert contar(db) == 0
+
+
+def test_el_telefono_es_opcional(usuarios, db):
+    response = crear({**ANA, "phone": ""})
 
     assert response.status_code == 201
-    assert response.json()["email"] is None
+    assert response.json()["phone"] is None
 
 
 @pytest.mark.parametrize(
@@ -137,24 +150,29 @@ def test_origen_invalido_o_campos_que_no_decide_el_navegador_422(usuarios, db, c
 # --- Duplicados (decisión T11) ------------------------------------------------------
 
 
-def test_mismo_nombre_y_email_409_aunque_cambien_mayusculas_y_espacios(usuarios, db):
+def test_el_mismo_email_409_aunque_cambien_el_nombre_y_las_mayusculas(usuarios, db):
     assert crear(ANA).status_code == 201
 
-    response = crear({**ANA, "first_name": " ANA ", "last_name": "smith", "email": "ANA@clinica.example.com"})
+    response = crear({**ANA, "first_name": "Laura", "last_name": "Jones", "email": " ANA@clinica.example.com "})
 
     assert response.status_code == 409
-    assert response.json() == {"detail": "Ya existe un contacto con ese nombre, apellidos y email"}
+    assert response.json() == {"detail": "Ya existe un contacto con ese email"}
     assert contar(db) == 1
 
 
-def test_mismo_nombre_y_telefono_409(usuarios, db):
-    base = {"first_name": "Ana", "last_name": "Smith", "phone": "(212) 555-0123", "source": "google"}
-    assert crear(base).status_code == 201
+def test_el_mismo_telefono_409_aunque_cambie_el_nombre_y_como_se_escribe(usuarios, db):
+    assert crear({**ANA, "phone": "(212) 555-0123"}).status_code == 201
 
-    response = crear({**base, "phone": "+1 212-555-0123", "email": "otra@clinica.example.com"})
+    response = crear(otra("Laura", last_name="Jones", phone="+1 212-555-0123"))
 
     assert response.status_code == 409
-    assert response.json() == {"detail": "Ya existe un contacto con ese nombre, apellidos y teléfono"}
+    assert response.json() == {"detail": "Ya existe un contacto con ese teléfono"}
+    assert contar(db) == 1
+
+
+def test_varios_contactos_sin_telefono_si_pueden_convivir(usuarios, db):
+    assert crear(ANA).status_code == 201
+    assert crear(otra("Laura")).status_code == 201
 
 
 @pytest.mark.parametrize(
@@ -170,20 +188,66 @@ def test_con_tildes_422_con_el_aviso_y_no_se_guarda(usuarios, db, cambio):
     assert contar(db) == 0
 
 
-def test_una_familia_puede_compartir_email_y_telefono(usuarios, db):
-    familia = {"last_name": "Smith", "email": "familia@clinica.example.com", "phone": "(212) 555-0123", "source": "referral"}
+def test_dos_personas_con_el_mismo_nombre_y_emails_distintos_si_pueden_convivir(usuarios, db):
+    assert crear(ANA).status_code == 201
+    assert crear({**ANA, "email": "ana.otra@clinica.example.com"}).status_code == 201
+    assert contar(db) == 2
 
-    assert crear({**familia, "first_name": "Ana"}).status_code == 201
-    assert crear({**familia, "first_name": "Laura"}).status_code == 201
-    assert crear({**ANA, "email": "ana.otra@clinica.example.com"}).status_code == 201  # misma persona, otro email
-    assert contar(db) == 3
+
+@pytest.mark.parametrize("role", list(Role))
+def test_el_email_de_una_cuenta_no_puede_ser_de_un_contacto(usuarios, db, role):
+    """Decisión T21b: quien trabaje en la clínica y también sea cliente usa otro email."""
+    response = crear({**ANA, "email": f"{role.value.upper()}@prueba.example.com"})
+
+    assert response.status_code == 422
+    assert "Ese email ya es de una cuenta de la clínica: usa otro" in mensajes(response)
+    assert contar(db) == 0
+
+
+# --- Notas de la ficha (T21b) -------------------------------------------------------
+
+
+def test_la_nota_se_guarda_normalizada_y_se_ve_en_la_ficha(usuarios, db):
+    contacto_id = crear({**ANA, "note": "  Instagram:   @ana_smith "}).json()["id"]
+
+    assert ver(contacto_id).json()["note"] == "Instagram: @ana_smith"
+
+
+def test_la_nota_es_opcional_y_vacia_equivale_a_no_tenerla(usuarios, db):
+    assert ver(crear(ANA).json()["id"]).json()["note"] is None
+    assert ver(crear(otra("Laura", note="   ")).json()["id"]).json()["note"] is None
+
+
+def test_la_nota_no_sale_en_la_lista(usuarios, db):
+    crear({**ANA, "note": "Instagram: @ana_smith"})
+
+    assert "note" not in listar().json()["items"][0]
+
+
+@pytest.mark.parametrize(
+    "nota, mensaje",
+    [("x" * 201, "La nota no puede tener más de 200 caracteres"), ("Mu\u00f1oz", "No se permiten tildes ni caracteres especiales (á, ñ, ü…)")],
+    ids=["larga", "con tilde"],
+)
+def test_nota_no_valida_422(usuarios, db, nota, mensaje):
+    response = crear({**ANA, "note": nota})
+
+    assert response.status_code == 422
+    assert mensaje in mensajes(response)
+
+
+def test_editar_la_nota_y_quitarla(usuarios, db):
+    contacto_id = crear({**ANA, "note": "antes"}).json()["id"]
+
+    assert editar(contacto_id, ficha_de_ana(note="despues")).json()["note"] == "despues"
+    assert editar(contacto_id, ficha_de_ana(note=None, version=2)).json()["note"] is None
 
 
 def test_tras_un_409_se_puede_seguir_creando(usuarios, db):
     crear(ANA)
     assert crear(ANA).status_code == 409
 
-    assert crear({**ANA, "first_name": "Laura"}).status_code == 201
+    assert crear(otra("Laura")).status_code == 201
 
 
 # --- La BD repite las reglas aunque alguien salte la API ----------------------------
@@ -192,9 +256,13 @@ def test_tras_un_409_se_puede_seguir_creando(usuarios, db):
 @pytest.mark.parametrize(
     "columnas, valores",
     [
-        ("first_name, last_name, source", "'Ana', 'Smith', 'google'"),  # sin email ni teléfono
+        ("first_name, last_name, source", "'Ana', 'Smith', 'google'"),  # sin email
+        ("first_name, last_name, phone, source", "'Ana', 'Smith', '+12125550123', 'google'"),  # teléfono, sin email
+        ("first_name, last_name, email, source, note", "'Ana', 'Smith', 'a@x.com', 'google', ' x'"),
+        ("first_name, last_name, email, source, note", "'Ana', 'Smith', 'a@x.com', 'google', ''"),
+        ("first_name, last_name, email, source, note", "'Ana', 'Smith', 'a@x.com', 'google', 'Mu\u00f1oz'"),
         ("first_name, last_name, email, source", "'Ana', 'Smith', 'Ana@X.com', 'google'"),
-        ("first_name, last_name, phone, source", "'Ana', 'Smith', '2125550123', 'google'"),
+        ("first_name, last_name, email, phone, source", "'Ana', 'Smith', 'a@x.com', '2125550123', 'google'"),
         ("first_name, last_name, email, source", "' Ana', 'Smith', 'a@x.com', 'google'"),
         ("first_name, last_name, email, source", "'Ana  Maria', 'Smith', 'a@x.com', 'google'"),
         ("first_name, last_name, email, source", "'', 'Smith', 'a@x.com', 'google'"),
@@ -205,7 +273,7 @@ def test_tras_un_409_se_puede_seguir_creando(usuarios, db):
         ("first_name, last_name, email, source", "'Ana', 'Smith', 'jos\u00e9@x.com', 'google'"),
         ("first_name, last_name, email, source", "'Ana2', 'Smith', 'a@x.com', 'google'"),
     ],
-    ids=["sin contacto", "email sin normalizar", "teléfono sin +", "espacio inicial", "espacio doble",
+    ids=["sin email", "solo teléfono", "nota con espacio", "nota vacía", "nota con eñe", "email sin normalizar", "teléfono sin +", "espacio inicial", "espacio doble",
          "nombre vacío", "origen inválido", "estado inválido", "nombre con tilde", "apellido con eñe",
          "email con tilde", "nombre con cifra"],
 )
@@ -214,11 +282,18 @@ def test_la_bd_rechaza_datos_que_salten_la_api(db, columnas, valores):
         db.execute(text(f"INSERT INTO contacts ({columnas}) VALUES ({valores})"))
 
 
-def test_la_bd_rechaza_el_duplicado_aunque_salte_la_api(db):
+def test_la_bd_rechaza_el_email_repetido_aunque_salte_la_api(db):
     db.execute(text("INSERT INTO contacts (first_name, last_name, email, source) VALUES ('Ana', 'Smith', 'a@x.com', 'google')"))
 
-    with pytest.raises(IntegrityError, match="uq_contacts_name_email"), db.begin_nested():
-        db.execute(text("INSERT INTO contacts (first_name, last_name, email, source) VALUES ('ANA', 'smith', 'a@x.com', 'other')"))
+    with pytest.raises(IntegrityError, match="uq_contacts_email"), db.begin_nested():
+        db.execute(text("INSERT INTO contacts (first_name, last_name, email, source) VALUES ('Eva', 'Jones', 'a@x.com', 'other')"))
+
+
+def test_la_bd_rechaza_el_telefono_repetido_aunque_salte_la_api(db):
+    db.execute(text("INSERT INTO contacts (first_name, last_name, email, phone, source) VALUES ('Ana', 'Smith', 'a@x.com', '+12125550123', 'google')"))
+
+    with pytest.raises(IntegrityError, match="uq_contacts_phone"), db.begin_nested():
+        db.execute(text("INSERT INTO contacts (first_name, last_name, email, phone, source) VALUES ('Eva', 'Jones', 'b@x.com', '+12125550123', 'other')"))
 
 
 def test_borrar_al_autor_conserva_el_contacto(usuarios, db):
@@ -251,7 +326,7 @@ def listar(q: str | None = None, role: Role = Role.RECEPTION, **filtros):
 
 @pytest.mark.parametrize("role", [Role.RECEPTION, Role.ADMIN])
 def test_recepcion_y_admin_ven_la_lista_del_mas_reciente_al_mas_antiguo(usuarios, db, role):
-    ids = guardar(db, ("Ana", "Smith", "ana@x.com", None), ("Luis", "Perez", None, "+12125550123"))
+    ids = guardar(db, ("Ana", "Smith", "ana@x.com", None), ("Luis", "Perez", "luis@x.com", "+12125550123"))
 
     response = listar(role=role)
 
@@ -370,7 +445,7 @@ def test_recepcion_y_admin_ven_la_ficha(usuarios, db, role):
     assert response.status_code == 200
     assert response.json() | {"created_at": "", "updated_at": ""} == {
         **creado, "created_at": "", "updated_at": "", "version": 1,
-        "created_by_email": "reception@prueba.example.com", "updated_by_email": None,
+        "created_by_email": "reception@prueba.example.com", "updated_by_email": None, "note": None,
     }
 
 
@@ -394,12 +469,12 @@ def test_ficha_que_no_existe_404(usuarios, db):
 def test_editar_conserva_el_id_normaliza_y_sube_la_version(usuarios, db, role):
     creado = crear(ANA).json()
 
-    response = editar(creado["id"], ficha_de_ana(first_name="  Anna ", email=None, phone="(212) 555-0123", source="google"), role)
+    response = editar(creado["id"], ficha_de_ana(first_name="  Anna ", email=" Anna@Clinica.Example.com ", phone="(212) 555-0123", source="google"), role)
 
     assert response.status_code == 200
     datos = response.json()
     assert (datos["id"], datos["first_name"], datos["email"], datos["phone"], datos["source"]) == (
-        creado["id"], "Anna", None, "+12125550123", "google",
+        creado["id"], "Anna", "anna@clinica.example.com", "+12125550123", "google",
     )
     assert datos["version"] == 2
     assert datos["status"] == "new"  # el estado no se toca (T14)
@@ -439,13 +514,13 @@ def test_guardar_sin_cambios_no_choca_consigo_misma(usuarios, db):
 
 
 def test_la_edicion_que_crea_un_duplicado_409_y_no_cambia_nada(usuarios, db):
-    crear({**ANA, "first_name": "Laura"})
+    crear(otra("Laura"))
     ana_id = crear(ANA).json()["id"]
 
-    response = editar(ana_id, ficha_de_ana(first_name="LAURA"))
+    response = editar(ana_id, ficha_de_ana(email="LAURA@clinica.example.com"))
 
     assert response.status_code == 409
-    assert response.json() == {"detail": "Ya existe un contacto con ese nombre, apellidos y email"}
+    assert response.json() == {"detail": "Ya existe un contacto con ese email"}
     contacto = db.get(Contact, ana_id, populate_existing=True)
     assert (contacto.first_name, contacto.version) == ("Ana", 1)
 
@@ -454,13 +529,14 @@ def test_la_edicion_que_crea_un_duplicado_409_y_no_cambia_nada(usuarios, db):
     "cambio",
     [
         {"first_name": "Jos\u00e9"},
-        {"email": None, "phone": None},
+        {"email": None},
+        {"email": "  "},
         {"status": "client"},
         {"created_by_id": 1},
         {"version": 0},
         {"version": None},
     ],
-    ids=["con tilde", "sin email ni teléfono", "fijar estado", "fijar autor", "versión 0", "sin versión"],
+    ids=["con tilde", "email null", "email vacío", "fijar estado", "fijar autor", "versión 0", "sin versión"],
 )
 def test_edicion_no_valida_422_y_no_cambia_nada(usuarios, db, cambio):
     contacto_id = crear(ANA).json()["id"]
@@ -496,7 +572,7 @@ def cambiar_estado(contact_id: int, estado: str, version: int = 1, role: Role = 
 
 def en_estado(db, estado: str, nombre: str = "Ana") -> int:
     """Crea el contacto por la API y lo deja en ese estado directamente en la BD (las citas aún no existen)."""
-    contacto_id = crear({**ANA, "first_name": nombre}).json()["id"]
+    contacto_id = crear(otra(nombre)).json()["id"]
     db.execute(text("UPDATE contacts SET status = :s WHERE id = :id"), {"s": estado, "id": contacto_id})
     return contacto_id
 
@@ -719,9 +795,9 @@ def test_filtrar_por_un_estado_o_varios(usuarios, db):
 
 def test_filtrar_por_responsable_mios_y_sin_asignar(usuarios, db):
     mio = crear(ANA).json()["id"]
-    de_admin = crear({**ANA, "first_name": "Eva"}, Role.ADMIN).json()["id"]
-    sin_nadie = crear({**ANA, "first_name": "Luz"}).json()["id"]
-    assert editar(sin_nadie, ficha_de_ana(first_name="Luz", owner_id=None)).status_code == 200
+    de_admin = crear(otra("Eva"), Role.ADMIN).json()["id"]
+    sin_nadie = crear(otra("Luz")).json()["id"]
+    assert editar(sin_nadie, otra("Luz", phone=None, owner_id=None, version=1)).status_code == 200
 
     assert [c["id"] for c in listar(owner="me").json()["items"]] == [mio]
     assert [c["id"] for c in listar(owner="me", role=Role.ADMIN).json()["items"]] == [de_admin]
@@ -730,7 +806,7 @@ def test_filtrar_por_responsable_mios_y_sin_asignar(usuarios, db):
 
 def test_los_filtros_se_combinan_con_la_busqueda(usuarios, db):
     ana = crear(ANA).json()["id"]
-    crear({**ANA, "first_name": "Eva"})
+    assert crear(otra("Eva")).status_code == 201
     assert cambiar_estado(ana, "contacted").status_code == 200
 
     assert [c["id"] for c in listar("ana", status="contacted", owner="me").json()["items"]] == [ana]

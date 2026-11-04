@@ -112,7 +112,7 @@ describe("lista de contactos", () => {
           contacto(2, {
             first_name: "Luis",
             last_name: "Perez",
-            email: null,
+            email: "luis@clinica.example.com",
             phone: "+12125550123",
             source: "walk_in",
             owner_id: null,
@@ -127,7 +127,7 @@ describe("lista de contactos", () => {
     const lista = await screen.findByRole("list");
     const filas = within(lista).getAllByRole("listitem");
     expect(filas.map((f) => f.textContent)).toEqual([
-      "Luis Perez(212) 555-0123Nuevo · En persona · Sin responsable",
+      "Luis Perezluis@clinica.example.com · (212) 555-0123Nuevo · En persona · Sin responsable",
       "Ana Smithana@clinica.example.comNuevo · Instagram · recepcion@prueba.example.com",
     ]);
     expect(screen.getByText("2 contactos")).toBeTruthy();
@@ -243,7 +243,7 @@ describe("alta de contactos", () => {
       Nombre: "Ana",
       Apellidos: "Smith",
       Email: "Ana@Clinica.Example.com",
-      Teléfono: "(212) 555-0123",
+      "Teléfono (opcional)": "(212) 555-0123",
       Origen: "instagram",
     });
     await u.click(screen.getByRole("button", { name: "Guardar contacto" }));
@@ -257,6 +257,7 @@ describe("alta de contactos", () => {
       email: "Ana@Clinica.Example.com",
       phone: "(212) 555-0123",
       source: "instagram",
+      note: "",
     });
     expect(await screen.findByText("ana@clinica.example.com · (212) 555-0123")).toBeTruthy();
     expect(screen.queryByRole("form", { name: "Nuevo contacto" })).toBeNull(); // formulario cerrado

@@ -68,6 +68,7 @@ export default function CitasContacto({ contacto }: { contacto: number }) {
                     {cita.service_name}
                     {!profesional && ` · ${cita.staff_email}`} · {NOMBRE_ESTADO_CITA[cita.status]}
                   </span>
+                  {cita.note && <span className="cita__meta">Nota: {cita.note}</span>}
                 </li>
               );
             })}

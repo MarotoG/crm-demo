@@ -7,7 +7,7 @@ from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, MetaData, S
 from sqlalchemy.dialects.postgresql import ExcludeConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-from app.validators import MAX_CANCEL_NOTE_LENGTH
+from app.validators import MAX_CANCEL_NOTE_LENGTH, MAX_NOTE_LENGTH
 
 # Nombres de restricciones predecibles, para que las migraciones sean estables.
 NAMING_CONVENTION = {
@@ -120,16 +120,25 @@ def _name_ascii(column: str) -> str:
     return f"{column} ~ '^[A-Za-z][A-Za-z .''-]*$'"
 
 
+def _note_checks() -> tuple[CheckConstraint, CheckConstraint]:
+    # Nota opcional de una línea (T21b): sin espacios de más y solo ASCII visible, hasta su máximo.
+    return (
+        CheckConstraint(_name_normalized("note"), name="note_normalized"),
+        CheckConstraint(f"note ~ '^[ -~]{{1,{MAX_NOTE_LENGTH}}}$'", name="note_ascii"),
+    )
+
+
 class Contact(Base):
     """Ficha de una persona: lead y después cliente, sin duplicarla (T11).
 
-    Sin datos clínicos (alergias, fecha de nacimiento, historia) ni notas libres.
+    Una persona, un contacto (decisión T21b): email obligatorio y único, y teléfono opcional y
+    único. Un menor no tiene ficha: su cita va a nombre de su madre o padre, con una nota. Sin datos
+    clínicos (alergias, fecha de nacimiento, historia).
     La BD repite las reglas de la API para que nadie las salte escribiendo directamente.
     """
 
     __tablename__ = "contacts"
     __table_args__ = (
-        CheckConstraint("email IS NOT NULL OR phone IS NOT NULL", name="email_or_phone"),
         CheckConstraint("email = lower(btrim(email))", name="email_normalized"),
         # E.164: «+», prefijo de país sin 0 inicial y de 8 a 15 cifras en total.
         CheckConstraint(r"phone ~ '^\+[1-9][0-9]{7,14}$'", name="phone_e164"),
@@ -142,33 +151,18 @@ class Contact(Base):
         CheckConstraint("version >= 1", name="version_positive"),
         CheckConstraint(_in_list("source", ContactSource), name="source_valid"),
         CheckConstraint(_in_list("status", ContactStatus), name="status_valid"),
-        # Duplicados (decisión T11): el email o el teléfono pueden repetirse (una familia),
-        # pero no junto con el mismo nombre y apellidos, sin distinguir mayúsculas. Al ser
-        # índices únicos de PostgreSQL, dos altas simultáneas no pueden pasar las dos.
-        Index(
-            "uq_contacts_name_email",
-            func.lower(text("first_name")),
-            func.lower(text("last_name")),
-            text("email"),
-            unique=True,
-            postgresql_where=text("email IS NOT NULL"),
-        ),
-        Index(
-            "uq_contacts_name_phone",
-            func.lower(text("first_name")),
-            func.lower(text("last_name")),
-            text("phone"),
-            unique=True,
-            postgresql_where=text("phone IS NOT NULL"),
-        ),
+        *_note_checks(),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     first_name: Mapped[str] = mapped_column(String(100))
     last_name: Mapped[str] = mapped_column(String(100))
-    email: Mapped[str | None] = mapped_column(String(254))
-    phone: Mapped[str | None] = mapped_column(String(16))
+    # Únicos en PostgreSQL: dos altas simultáneas no pueden pasar las dos (T21b).
+    email: Mapped[str] = mapped_column(String(254), unique=True)
+    phone: Mapped[str | None] = mapped_column(String(16), unique=True)
     source: Mapped[str] = mapped_column(String(20))
+    # Por ejemplo, su usuario de Instagram (T21b). La escriben admin y recepción; el cliente no la ve.
+    note: Mapped[str | None] = mapped_column(String(MAX_NOTE_LENGTH))
     status: Mapped[str] = mapped_column(String(20), default=ContactStatus.NEW, server_default=ContactStatus.NEW.value)
     # Si se borrara la cuenta de quien lo creó, el contacto se conserva.
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
@@ -281,6 +275,7 @@ class Appointment(Base):
         CheckConstraint(f"cancel_note ~ '^[ -~]{{1,{MAX_CANCEL_NOTE_LENGTH}}}$'", name="cancel_note_ascii"),
         # Asistencia (T20b): Realizada o No presentado si y solo si se sabe cuándo se marcó.
         CheckConstraint("(status IN ('completed', 'no_show')) = (attended_at IS NOT NULL)", name="attended_has_time"),
+        *_note_checks(),
         # La agenda de cada persona por fecha (T18).
         Index("ix_appointments_staff_id_starts_at", "staff_id", "starts_at"),
         # Solapamientos (T17): la misma persona no puede tener dos citas que se pisen. Intervalo
@@ -323,6 +318,9 @@ class Appointment(Base):
     cancel_note: Mapped[str | None] = mapped_column(String(MAX_CANCEL_NOTE_LENGTH))
     # Al marcar la asistencia (T20b), la primera vez; corregirla no la cambia (plazo de 7 días).
     attended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Nota corta (T21b), por ejemplo si la cita es para su hijo menor. La escriben admin y recepción
+    # y la ve el profesional asignado; el cliente no. Distinta del detalle de una cancelación.
+    note: Mapped[str | None] = mapped_column(String(MAX_NOTE_LENGTH))
 
 
 class PortalInvitation(Base):

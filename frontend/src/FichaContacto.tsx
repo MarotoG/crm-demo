@@ -68,10 +68,11 @@ function datosDe(ficha: ContactoDetalle): DatosFormulario {
   return {
     first_name: ficha.first_name,
     last_name: ficha.last_name,
-    email: ficha.email ?? "",
+    email: ficha.email,
     phone: ficha.phone ? formatoTelefono(ficha.phone) : "",
     source: ficha.source,
     owner_id: ficha.owner_id === null ? "" : String(ficha.owner_id),
+    note: ficha.note ?? "",
   };
 }
 
@@ -295,7 +296,7 @@ function Ficha({
         <>
           <dl className="ficha">
             <dt>Email</dt>
-            <dd>{ficha.email ?? "—"}</dd>
+            <dd>{ficha.email}</dd>
             <dt>Teléfono</dt>
             <dd>{ficha.phone ? formatoTelefono(ficha.phone) : "—"}</dd>
             <dt>Origen</dt>
@@ -304,6 +305,12 @@ function Ficha({
             <dd>{NOMBRE_ESTADO[ficha.status]}</dd>
             <dt>Responsable</dt>
             <dd>{ficha.owner_email ?? "Sin responsable"}</dd>
+            {ficha.note && (
+              <>
+                <dt>Nota</dt>
+                <dd>{ficha.note}</dd>
+              </>
+            )}
             <dt>Creado</dt>
             <dd>
               {formatoFecha(ficha.created_at)} · {ficha.created_by_email ?? "cuenta ya no disponible"}

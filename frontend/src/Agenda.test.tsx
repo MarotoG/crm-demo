@@ -54,7 +54,7 @@ const ANA: Contacto = {
   owner_email: RECEPCION.email,
 };
 const BEA: Contacto = { ...ANA, id: 8, first_name: "Bea", last_name: "Ruiz", email: "bea@clinica.example.com", phone: null };
-const ANA_FICHA: ContactoDetalle = { ...ANA, version: 1, updated_at: ANA.created_at, created_by_email: RECEPCION.email, updated_by_email: null };
+const ANA_FICHA: ContactoDetalle = { ...ANA, version: 1, updated_at: ANA.created_at, created_by_email: RECEPCION.email, updated_by_email: null, note: null };
 
 function cita(id: number, inicio: string, fin: string, cambios: Partial<CitaAgenda> = {}): CitaAgenda {
   return {
@@ -71,11 +71,17 @@ function cita(id: number, inicio: string, fin: string, cambios: Partial<CitaAgen
     cancel_reason: null,
     cancel_note: null,
     attended_at: null,
+    note: null,
     contact_name: "Ana Lopez",
     service_name: "Botox",
     staff_email: P_PRO.email,
     ...cambios,
   };
+}
+
+/** Los botones de una fila, sin el de la nota (T21b), que está en todas y tiene sus propias pruebas. */
+function accionesDe(fila: { queryAllByRole: (rol: "button") => HTMLElement[] }): (string | null)[] {
+  return fila.queryAllByRole("button").map((b) => b.textContent).filter((texto) => !texto?.includes("nota"));
 }
 
 // Lunes 11/01/2027: Ana a las 9:30 con el profesional; Bea de 23:30 a 0:30 con la admin.
@@ -475,7 +481,7 @@ describe("reprogramar y cancelar", () => {
     expect(ana.getByRole("button", { name: `Reprogramar: Ana Lopez, 9:30–10:30` })).toBeTruthy();
     expect(ana.getByRole("button", { name: `Cancelar la cita: Ana Lopez, 9:30–10:30` })).toBeTruthy();
     const bea = await fila("Bea Ruiz");
-    expect(bea.queryByRole("button")).toBeNull();
+    expect(accionesDe(bea)).toEqual([]);
     // Cancelada: atenuada (tachada por CSS) y con su motivo.
     expect((await filas())[1]).toBe(`23:30–0:30 (12/01)Bea RuizPeel · ${P_ADMIN.email} · Cancelada (Lo pidió la clienta: Llamara otro dia)`);
     expect(document.querySelectorAll("li.cita--cancelada")).toHaveLength(1);
@@ -1018,9 +1024,9 @@ describe("asistencia", () => {
     abrir();
 
     const ana = await fila("Ana Lopez");
-    expect(ana.getAllByRole("button").map((b) => b.textContent)).toEqual(["Realizada", "No presentado"]);
+    expect(accionesDe(ana)).toEqual(["Realizada", "No presentado"]);
     const bea = await fila("Bea Ruiz");
-    expect(bea.getAllByRole("button").map((b) => b.textContent)).toEqual(["Reprogramar", "Cancelar cita"]);
+    expect(accionesDe(bea)).toEqual(["Reprogramar", "Cancelar cita"]);
   });
 
   it("«Realizada» envía el estado y la versión, avisa y recarga la agenda", async () => {
@@ -1058,8 +1064,8 @@ describe("asistencia", () => {
 
     const ana = await fila("Ana Lopez");
     expect(ana.getByText(/Realizada$/)).toBeTruthy();
-    expect(ana.getAllByRole("button").map((b) => b.textContent)).toEqual(["Cambiar a No presentado"]);
-    expect((await fila("Bea Ruiz")).getAllByRole("button").map((b) => b.textContent)).toEqual(["Cambiar a Realizada"]);
+    expect(accionesDe(ana)).toEqual(["Cambiar a No presentado"]);
+    expect(accionesDe((await fila("Bea Ruiz")))).toEqual(["Cambiar a Realizada"]);
 
     await u.click(ana.getByRole("button", { name: /^Cambiar a No presentado/ }));
 
@@ -1071,14 +1077,14 @@ describe("asistencia", () => {
     rutas["GET /api/appointments"] = agendaFalsa([{ ...DE_ANA, status: "completed", attended_at: "2027-01-04T11:59:00-05:00" }]);
     abrir();
 
-    expect((await fila("Ana Lopez")).queryAllByRole("button")).toEqual([]);
+    expect(accionesDe((await fila("Ana Lopez")))).toEqual([]);
   });
 
   it("una cancelada que ya pasó no tiene botones", async () => {
     rutas["GET /api/appointments"] = agendaFalsa([{ ...DE_ANA, status: "cancelled", cancel_reason: "clinic" }]);
     abrir();
 
-    expect((await fila("Ana Lopez")).queryAllByRole("button")).toEqual([]);
+    expect(accionesDe((await fila("Ana Lopez")))).toEqual([]);
   });
 
   it("si otra persona la marcó antes (409), avisa y recarga", async () => {
@@ -1101,7 +1107,7 @@ describe("asistencia", () => {
   it("también desde la vista del mes", async () => {
     abrir("/agenda?vista=mes&fecha=2027-01-11");
 
-    expect((await fila("Ana Lopez")).getAllByRole("button").map((b) => b.textContent)).toEqual(["Realizada", "No presentado"]);
+    expect(accionesDe((await fila("Ana Lopez")))).toEqual(["Realizada", "No presentado"]);
   });
 
   it("la profesional marca las suyas en «Mi agenda», sin reprogramar ni cancelar", async () => {
@@ -1110,8 +1116,8 @@ describe("asistencia", () => {
     rutas["POST /api/appointments/1/attendance"] = () => ({ status: 200, cuerpo: { ...DE_ANA, status: "completed" } });
     const u = abrir("/mi-agenda?fecha=2027-01-11");
 
-    expect((await fila("Ana Lopez")).getAllByRole("button").map((b) => b.textContent)).toEqual(["Realizada", "No presentado"]);
-    expect((await fila("Bea Ruiz")).queryAllByRole("button")).toEqual([]); // aún no ha empezado
+    expect(accionesDe((await fila("Ana Lopez")))).toEqual(["Realizada", "No presentado"]);
+    expect(accionesDe((await fila("Bea Ruiz")))).toEqual([]); // aún no ha empezado
 
     await u.click((await fila("Ana Lopez")).getByRole("button", { name: /^Realizada/ }));
 
@@ -1136,5 +1142,123 @@ describe("cuándo se marca y se corrige", () => {
     expect(sePuedeCorregir(marcada, new Date("2027-01-18T15:00:01Z"))).toBe(false);
     expect(sePuedeCorregir(ana({ status: "completed", attended_at: null }), MEDIODIA)).toBe(false);
     expect(sePuedeCorregir(ana({ status: "scheduled", attended_at: "2027-01-11T15:00:00Z" }), MEDIODIA)).toBe(false);
+  });
+});
+
+describe("nota de la cita (T21b)", () => {
+  const notas = () => llamadas.filter((l) => l.metodo === "PUT" && l.ruta.endsWith("/note"));
+
+  it("se añade con su propio botón, envía la versión y el token, y recarga", async () => {
+    rutas["PUT /api/appointments/1/note"] = () => ({ status: 200, cuerpo: { ...DE_ANA, note: "Para Leo", version: 2 } });
+    const u = abrir("/agenda?fecha=2027-01-11");
+
+    const ana = await fila("Ana Lopez");
+    await u.click(ana.getByRole("button", { name: /^Añadir una nota: Ana Lopez/ }));
+    expect(screen.getByText(/No escribas datos clínicos/)).toBeTruthy();
+    await u.type(screen.getByLabelText("Nota"), " Para Leo ");
+    rutas["GET /api/appointments"] = agendaFalsa([{ ...DE_ANA, note: "Para Leo", version: 2 }]);
+    await u.click(screen.getByRole("button", { name: "Guardar nota" }));
+
+    expect(await screen.findByText("Nota: Para Leo")).toBeTruthy();
+    expect((await screen.findByRole("status")).textContent).toBe("Nota guardada: Ana Lopez");
+    expect(notas()[0].cuerpo).toEqual({ version: 1, note: "Para Leo" });
+    expect(notas()[0].headers["X-CSRF-Token"]).toBe(RECEPCION.csrf_token);
+  });
+
+  it("una nota que ya existe sale escrita, y vaciarla envía null", async () => {
+    rutas["GET /api/appointments"] = agendaFalsa([{ ...DE_ANA, note: "Para Leo" }]);
+    rutas["PUT /api/appointments/1/note"] = () => ({ status: 200, cuerpo: { ...DE_ANA, version: 2 } });
+    const u = abrir("/agenda?fecha=2027-01-11");
+
+    await u.click((await fila("Ana Lopez")).getByRole("button", { name: /^Editar la nota: Ana Lopez/ }));
+    const campo = screen.getByLabelText("Nota") as HTMLInputElement;
+    expect(campo.value).toBe("Para Leo");
+    await u.clear(campo);
+    await u.click(screen.getByRole("button", { name: "Guardar nota" }));
+
+    await waitFor(() => expect(notas()[0]?.cuerpo).toEqual({ version: 1, note: null }));
+  });
+
+  it("«Volver» cierra el recuadro sin guardar", async () => {
+    const u = abrir("/agenda?fecha=2027-01-11");
+
+    await u.click((await fila("Ana Lopez")).getByRole("button", { name: /^Añadir una nota/ }));
+    await u.click(screen.getByRole("button", { name: "Volver" }));
+
+    expect(screen.queryByLabelText("Nota")).toBeNull();
+    expect(notas()).toHaveLength(0);
+  });
+
+  it("una tilde se avisa sin llamar a la API", async () => {
+    const u = abrir("/agenda?fecha=2027-01-11");
+
+    await u.click((await fila("Ana Lopez")).getByRole("button", { name: /^Añadir una nota/ }));
+    await u.type(screen.getByLabelText("Nota"), "niño");
+    await u.click(screen.getByRole("button", { name: "Guardar nota" }));
+
+    expect((await screen.findByRole("alert")).textContent).toBe("No se permiten tildes ni caracteres especiales (á, ñ, ü…)");
+    expect(notas()).toHaveLength(0);
+  });
+
+  it("si otra persona cambió la cita, avisa y recarga la lista", async () => {
+    rutas["PUT /api/appointments/1/note"] = () => ({ status: 409, cuerpo: { detail: "Esta cita ha cambiado desde que la abriste." } });
+    const u = abrir("/agenda?fecha=2027-01-11");
+
+    await u.click((await fila("Ana Lopez")).getByRole("button", { name: /^Añadir una nota/ }));
+    await u.type(screen.getByLabelText("Nota"), "Para Leo");
+    const antes = llamadas.filter((l) => l.metodo === "GET" && l.ruta === "/api/appointments").length;
+    await u.click(screen.getByRole("button", { name: "Guardar nota" }));
+
+    expect((await screen.findByRole("alert")).textContent).toContain("ha cambiado");
+    await waitFor(() => expect(llamadas.filter((l) => l.metodo === "GET" && l.ruta === "/api/appointments").length).toBeGreaterThan(antes));
+    expect(screen.queryByLabelText("Nota")).toBeNull();
+  });
+
+  it("se puede escribir al dar la cita", async () => {
+    const { u, formulario } = await abrirFormulario();
+    rutas["POST /api/appointments"] = () => ({
+      status: 201,
+      cuerpo: cita(5, "2027-01-11T11:15:00-05:00", "2027-01-11T12:15:00-05:00"),
+    });
+
+    await elegirContacto(u);
+    await u.selectOptions(formulario.getByLabelText("Servicio"), "Botox (1 h)");
+    await u.selectOptions(formulario.getByLabelText("Hora"), "11");
+    await u.selectOptions(formulario.getByLabelText("Minutos"), "15");
+    await u.type(formulario.getByLabelText("Nota (opcional)"), " Para Leo ");
+    await u.click(formulario.getByRole("button", { name: "Guardar cita" }));
+
+    await screen.findByRole("status");
+    expect(posts()[0].cuerpo).toEqual({ contact_id: 7, service_id: 10, staff_id: 3, starts_at: "2027-01-11T11:15", note: "Para Leo" });
+  });
+
+  it("con una tilde al dar la cita, avisa sin llamar a la API", async () => {
+    const { u, formulario } = await abrirFormulario();
+
+    await elegirContacto(u);
+    await u.selectOptions(formulario.getByLabelText("Servicio"), "Botox (1 h)");
+    await u.type(formulario.getByLabelText("Nota (opcional)"), "niño");
+    await u.click(formulario.getByRole("button", { name: "Guardar cita" }));
+
+    expect(await formulario.findByText("No se permiten tildes ni caracteres especiales (á, ñ, ü…)")).toBeTruthy();
+    expect(posts()).toHaveLength(0);
+  });
+
+  it("en «Mi agenda» se lee la nota, pero no hay botón para cambiarla", async () => {
+    rutas["GET /api/auth/me"] = () => ({ status: 200, cuerpo: PROFESIONAL });
+    rutas["GET /api/appointments"] = agendaFalsa([{ ...DE_ANA, note: "Para Leo" }]);
+    abrir("/mi-agenda?fecha=2027-01-11");
+
+    expect(await screen.findByText("Nota: Para Leo")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /nota/i })).toBeNull();
+  });
+
+  it("al reprogramar el formulario no pide la nota", async () => {
+    const u = abrir("/agenda?fecha=2027-01-11");
+
+    await u.click((await fila("Ana Lopez")).getByRole("button", { name: /^Reprogramar/ }));
+
+    expect(await screen.findByRole("form", { name: "Reprogramar cita" })).toBeTruthy();
+    expect(screen.queryByLabelText("Nota (opcional)")).toBeNull();
   });
 });

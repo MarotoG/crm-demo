@@ -62,7 +62,7 @@ export type UsuarioAdmin = { id: number; email: string; role: Rol; active: boole
 /**
  * Error de una llamada: status es null si ni siquiera hubo respuesta (red, tiempo agotado).
  * En un 422, `campos` trae el mensaje de cada campo no válido (p. ej. { email: "…" }) y
- * `general` los que no son de un campo concreto («Indica al menos un email o un teléfono»).
+ * `general` los que no son de un campo concreto.
  */
 export class ErrorApi extends Error {
   readonly status: number | null;
@@ -178,7 +178,8 @@ export type Contacto = {
   id: number;
   first_name: string;
   last_name: string;
-  email: string | null;
+  /** Obligatorio y único (T21b): una persona, un email. Es también con el que entra al portal. */
+  email: string;
   phone: string | null;
   source: OrigenContacto;
   status: EstadoContacto;
@@ -201,6 +202,7 @@ export type NuevoContacto = {
   email: string;
   phone: string;
   source: OrigenContacto;
+  note: string;
 };
 
 /** Los 20 más recientes que coinciden con `busqueda` (vacía: todos) y los filtros, y el total. */
@@ -225,6 +227,8 @@ export type ContactoDetalle = Contacto & {
   updated_at: string;
   created_by_email: string | null;
   updated_by_email: string | null;
+  /** Nota corta (T21b), por ejemplo su usuario de Instagram. */
+  note: string | null;
 };
 
 export function obtenerContacto(id: number): Promise<ContactoDetalle> {
@@ -320,13 +324,15 @@ export type CitaAgenda = {
   cancel_note: string | null;
   /** Cuándo se marcó la asistencia la primera vez (T20b); null si no está marcada. */
   attended_at: string | null;
+  /** Nota interna (T21b): el cliente no la ve. */
+  note: string | null;
   contact_name: string;
   service_name: string;
   staff_email: string;
 };
 
 /** Sin la duración: la API la copia del servicio. `starts_at`: hora local de la clínica, «2027-01-11T09:30». */
-export type NuevaCita = { contact_id: number; service_id: number; staff_id: number; starts_at: string };
+export type NuevaCita = { contact_id: number; service_id: number; staff_id: number; starts_at: string; note?: string };
 
 /** Las citas que ocupan parte de un día (AAAA-MM-DD, en la hora de la clínica), por hora. */
 export function listarCitas(dia: string, filtros: { persona?: number; contacto?: number } = {}): Promise<CitaAgenda[]> {
@@ -381,6 +387,16 @@ export function marcarAsistencia(
   return peticion(`/api/appointments/${id}/attendance`, { method: "POST", cuerpo: datos, csrf });
 }
 
+/** Editar la nota (T21b), sin reprogramar y en cualquier estado; null la quita. 409 si otra persona
+ * cambió la cita antes. */
+export function editarNotaCita(
+  id: number,
+  datos: { version: number; note: string | null },
+  csrf: string,
+): Promise<Omit<CitaAgenda, "contact_name" | "service_name" | "staff_email">> {
+  return peticion(`/api/appointments/${id}/note`, { method: "PUT", cuerpo: datos, csrf });
+}
+
 /** Las citas de la ficha (T21): las 20 de fecha más reciente, también canceladas, y el total. El
  * profesional, solo las suyas. */
 export function listarCitasDeContacto(contacto: number): Promise<{ total: number; items: CitaAgenda[] }> {
@@ -400,12 +416,13 @@ export function generarInvitacion(contacto: number, csrf: string): Promise<{ tok
   return peticion(`/api/contacts/${contacto}/portal-invitation`, { method: "POST", csrf });
 }
 
-/** Sin sesión: lo que autoriza es el token del enlace. 410 si no vale. */
-export function comprobarInvitacion(token: string): Promise<void> {
-  return peticion<void>("/api/portal-invitations/check", { method: "POST", cuerpo: { token } });
+/** Sin sesión: lo que autoriza es el token del enlace. Devuelve con qué email se entrará; 410 si no vale. */
+export function comprobarInvitacion(token: string): Promise<{ email: string }> {
+  return peticion("/api/portal-invitations/check", { method: "POST", cuerpo: { token } });
 }
 
-/** Crea la cuenta y gasta el enlace; no inicia sesión. 409 si el email está en uso; 410 si no vale. */
-export function aceptarInvitacion(datos: { token: string; email: string; password: string }): Promise<void> {
+/** Crea la cuenta con el email de la ficha y gasta el enlace; no inicia sesión. 409 si ya hay otra
+ * cuenta con ese email; 410 si no vale. */
+export function aceptarInvitacion(datos: { token: string; password: string }): Promise<void> {
   return peticion<void>("/api/portal-invitations/accept", { method: "POST", cuerpo: datos });
 }

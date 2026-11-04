@@ -254,7 +254,7 @@ function ListaDeContactos({
 }
 
 // owner_id: el id del responsable como texto ("" = sin responsable); solo se usa al editar (T14).
-const VACIO = { first_name: "", last_name: "", email: "", phone: "", source: "" as OrigenContacto | "", owner_id: "" };
+const VACIO = { first_name: "", last_name: "", email: "", phone: "", source: "" as OrigenContacto | "", owner_id: "", note: "" };
 
 type Campo = keyof typeof VACIO;
 
@@ -262,12 +262,16 @@ const ETIQUETAS: Record<Campo, string> = {
   first_name: "Nombre",
   last_name: "Apellidos",
   email: "Email",
-  phone: "Teléfono",
+  phone: "Teléfono (opcional)",
   source: "Origen",
   owner_id: "Responsable",
+  note: "Nota (opcional)",
 };
 
-const CAMPOS_SIN_TILDES: Campo[] = ["first_name", "last_name", "email"];
+// Sin datos clínicos: la misma advertencia en la ficha y en la cita (T21b).
+export const AVISO_NOTA = "Una línea, sin tildes. No escribas datos clínicos (síntomas, diagnósticos ni tratamientos).";
+
+const CAMPOS_SIN_TILDES: Campo[] = ["first_name", "last_name", "email", "note"];
 
 export type DatosFormulario = typeof VACIO;
 
@@ -359,7 +363,7 @@ export function FormularioContacto<T>({
           type={tipo}
           autoComplete={autoComplete}
           value={datos[nombre]}
-          maxLength={nombre === "email" ? 254 : 100}
+          maxLength={nombre === "email" ? 254 : nombre === "note" ? 200 : 100}
           aria-invalid={error ? true : undefined}
           aria-describedby={error ? `error-${nombre}` : undefined}
           onChange={(e) => cambiar(nombre, e.target.value)}
@@ -379,7 +383,10 @@ export function FormularioContacto<T>({
       {campo("last_name", "text", "off")}
       {campo("email", "email", "off")}
       {campo("phone", "tel", "off")}
-      <p className="ayuda">Indica al menos un email o un teléfono. Teléfonos de EE. UU.: (212) 555-0123; de otros países, con + y el prefijo.</p>
+      <p className="ayuda">
+        El email es obligatorio y de una sola persona: también es con el que entrará al portal. Teléfonos de EE. UU.: (212)
+        555-0123; de otros países, con + y el prefijo.
+      </p>
       <div className="campo">
         <label htmlFor="contacto-source">{ETIQUETAS.source}</label>
         <select
@@ -426,6 +433,8 @@ export function FormularioContacto<T>({
           )}
         </div>
       )}
+      {campo("note", "text", "off")}
+      <p className="ayuda">Por ejemplo, su usuario de Instagram. {AVISO_NOTA}</p>
       {general.map((mensaje) => (
         <p key={mensaje} className="error" role="alert">
           {mensaje}

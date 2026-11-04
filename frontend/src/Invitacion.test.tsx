@@ -31,6 +31,7 @@ const ANA: ContactoDetalle = {
   version: 1,
   created_by_email: "recepcion@prueba.example.com",
   updated_by_email: null,
+  note: null,
   owner_id: 2,
   owner_email: "recepcion@prueba.example.com",
 };
@@ -49,6 +50,7 @@ const CITA: CitaAgenda = {
   cancel_reason: null,
   cancel_note: null,
   attended_at: null,
+  note: null,
   contact_name: "Ana Smith",
   service_name: "Botox",
   staff_email: "profesional@prueba.example.com",
@@ -71,7 +73,7 @@ beforeEach(() => {
     "GET /api/contacts/7/portal": () => ({ status: 200, cuerpo: SIN_INVITACION }),
     "GET /api/appointments/by-contact/7": () => ({ status: 200, cuerpo: { total: 0, items: [] } }),
     "POST /api/contacts/7/portal-invitation": () => ({ status: 201, cuerpo: { token: "token-secreto", expires_at: CADUCA } }),
-    "POST /api/portal-invitations/check": () => ({ status: 204 }),
+    "POST /api/portal-invitations/check": () => ({ status: 200, cuerpo: { email: "ana@clinica.example.com" } }),
     "POST /api/portal-invitations/accept": () => ({ status: 204 }),
     "GET /api/health": () => ({ status: 200, cuerpo: { status: "ok" } }),
     "GET /api/health/db": () => ({ status: 200, cuerpo: { status: "ok" } }),
@@ -224,6 +226,13 @@ describe("citas en la ficha", () => {
     expect(cancelada.closest("li")?.className).toContain("cita--cancelada");
   });
 
+  it("muestra la nota de la cita", async () => {
+    rutas["GET /api/appointments/by-contact/7"] = () => ({ status: 200, cuerpo: { total: 1, items: [{ ...CITA, note: "Para Leo" }] } });
+    abrir("/contactos/7");
+
+    expect(await screen.findByText("Nota: Para Leo")).toBeTruthy();
+  });
+
   it("sin citas lo dice", async () => {
     abrir("/contactos/7");
 
@@ -265,13 +274,12 @@ describe("la página de la invitación", () => {
   });
 
   async function rellenar(u: ReturnType<typeof userEvent.setup>, password = "una-frase-bastante-larga", repetida = password) {
-    await u.type(await screen.findByLabelText("Email"), "ana@example.com");
-    await u.type(screen.getByLabelText("Contraseña (al menos 12 caracteres)"), password);
+    await u.type(await screen.findByLabelText("Contraseña (al menos 12 caracteres)"), password);
     await u.type(screen.getByLabelText("Repite la contraseña"), repetida);
     await u.click(screen.getByRole("button", { name: "Crear cuenta" }));
   }
 
-  it("se abre sin sesión y envía el token sin datos de rol ni contacto; después va al login con el aviso", async () => {
+  it("se abre sin sesión y envía solo el token y la contraseña; después va al login con el aviso", async () => {
     const u = abrir("/invitacion#token-secreto");
 
     await rellenar(u);
@@ -281,16 +289,16 @@ describe("la página de la invitación", () => {
     expect(de("POST", "/api/portal-invitations/check")[0].cuerpo).toEqual({ token: "token-secreto" });
     expect(de("POST", "/api/portal-invitations/accept")[0].cuerpo).toEqual({
       token: "token-secreto",
-      email: "ana@example.com",
       password: "una-frase-bastante-larga",
     });
   });
 
-  it("no muestra ningún dato del contacto ni pide datos internos", async () => {
+  it("muestra con qué email se entrará, no deja cambiarlo y no enseña más datos", async () => {
     abrir("/invitacion#token-secreto");
 
-    await screen.findByLabelText("Email");
-    expect((screen.getByLabelText("Email") as HTMLInputElement).value).toBe("");
+    expect((await screen.findByText("ana@clinica.example.com")).tagName).toBe("STRONG");
+    expect(screen.getByText(/avisa a la clínica/)).toBeTruthy();
+    expect(screen.queryByRole("textbox")).toBeNull();
     expect(screen.queryByText(/Ana/)).toBeNull();
     expect(de("GET", "/api/contacts/7")).toHaveLength(0);
   });
@@ -307,7 +315,7 @@ describe("la página de la invitación", () => {
     abrir("/invitacion#viejo");
 
     expect((await screen.findByRole("alert")).textContent).toBe(ENLACE_NO_VALIDO);
-    expect(screen.queryByLabelText("Email")).toBeNull();
+    expect(screen.queryByLabelText("Repite la contraseña")).toBeNull();
   });
 
   it("si la API no responde no dice que el enlace no vale, y deja reintentar", async () => {
@@ -315,10 +323,10 @@ describe("la página de la invitación", () => {
     const u = abrir("/invitacion#token-secreto");
 
     expect((await screen.findByRole("alert")).textContent).toContain("Servicio no disponible");
-    rutas["POST /api/portal-invitations/check"] = () => ({ status: 204 });
+    rutas["POST /api/portal-invitations/check"] = () => ({ status: 200, cuerpo: { email: "ana@clinica.example.com" } });
     await u.click(screen.getByRole("button", { name: "Reintentar" }));
 
-    expect(await screen.findByLabelText("Email")).toBeTruthy();
+    expect(await screen.findByText("ana@clinica.example.com")).toBeTruthy();
   });
 
   it("si las contraseñas no coinciden no llama a la API", async () => {
@@ -344,14 +352,16 @@ describe("la página de la invitación", () => {
     expect(screen.getByLabelText(/^Contraseña/).getAttribute("aria-describedby")).toBe(error.id);
   });
 
-  it("un email en uso se explica junto al campo y se puede volver a intentar", async () => {
-    rutas["POST /api/portal-invitations/accept"] = () => ({ status: 409, cuerpo: { detail: "Ese email ya está en uso: escribe otro" } });
+  it("si ya hay otra cuenta con ese email, explica que hay que escribir a la clínica", async () => {
+    rutas["POST /api/portal-invitations/accept"] = () => ({
+      status: 409,
+      cuerpo: { detail: "Ya hay una cuenta con este email. Escribe a la clínica para resolverlo." },
+    });
     const u = abrir("/invitacion#token-secreto");
 
     await rellenar(u);
 
-    const error = await screen.findByText("Ese email ya está en uso: escribe otro");
-    expect(screen.getByLabelText("Email").getAttribute("aria-describedby")).toBe(error.id);
+    expect((await screen.findByRole("alert")).textContent).toContain("Escribe a la clínica");
     expect((screen.getByRole("button", { name: "Crear cuenta" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
@@ -362,7 +372,7 @@ describe("la página de la invitación", () => {
     await rellenar(u);
 
     expect((await screen.findByRole("alert")).textContent).toBe(ENLACE_NO_VALIDO);
-    expect(screen.queryByLabelText("Email")).toBeNull();
+    expect(screen.queryByLabelText("Repite la contraseña")).toBeNull();
   });
 
   it("con una sesión abierta no deja gastar el enlace hasta cerrarla", async () => {
@@ -370,11 +380,11 @@ describe("la página de la invitación", () => {
     const u = abrir("/invitacion#token-secreto");
 
     await screen.findByText(/sesión abierta como recepcion@prueba\.example\.com/);
-    expect(screen.queryByLabelText("Email")).toBeNull();
+    expect(screen.queryByLabelText("Repite la contraseña")).toBeNull();
 
     await u.click(screen.getByRole("button", { name: "Cerrar sesión" }));
 
-    expect(await screen.findByLabelText("Email")).toBeTruthy();
+    expect(await screen.findByLabelText("Repite la contraseña")).toBeTruthy();
     await waitFor(() => expect(de("POST", "/api/auth/logout")[0].headers["X-CSRF-Token"]).toBe("csrf-recepcion"));
   });
 });

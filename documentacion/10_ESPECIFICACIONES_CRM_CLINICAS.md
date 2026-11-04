@@ -79,17 +79,17 @@ Definir la autorización en cada caso de uso del backend, incluidos filtros y ac
 
 Prueba mínima: cliente A no obtiene las citas de B ni cambiando una URL; recepción no puede asignarse rol de administrador; profesional A no modifica citas de B. Cuando no deba revelarse la existencia de un registro, responder sin filtrar su información. Aplicar también a listas, búsquedas y exportaciones futuras.
 
-Provisionar cuentas de demo mediante un procedimiento reproducible. El vínculo usuario-cliente debe ser explícito y único; no vincular automáticamente por un email que cualquiera pueda introducir. Registro público y recuperación de contraseña por email quedan fuera del núcleo; limitar la demo y describir esa restricción antes de un uso real. La cuenta de cliente se obtiene por invitación de un solo uso (sección 14).
+Provisionar cuentas de demo mediante un procedimiento reproducible. El vínculo usuario-cliente debe ser explícito y único, y sale de la invitación; no vincular automáticamente por un email que cualquiera pueda introducir. Registro público y recuperación de contraseña por email quedan fuera del núcleo; limitar la demo y describir esa restricción antes de un uso real. La cuenta de cliente se obtiene por invitación de un solo uso (sección 14).
 
 ## 6. Modelo de datos mínimo propuesto
 
 | Entidad | Campos/relaciones relevantes |
 |---|---|
-| users | id, email normalizado único, password_hash, role, active; vínculo opcional único a contact para el cliente |
+| users | id, email normalizado único, password_hash, role, active; vínculo único a contact para el cliente; su email es el de la ficha (T21b) |
 | sessions | Identificador/token opaco protegido, usuario, vencimiento y revocación; si se elige esta estrategia |
-| contacts | id, nombre, email/teléfono opcionales, origen, estado comercial, responsable, fechas; sin alergias, DOB ni historia clínica en el núcleo |
+| contacts | id, nombre, email obligatorio y único, teléfono opcional y único, nota corta, origen, estado comercial, responsable, fechas; sin alergias, DOB ni historia clínica en el núcleo |
 | services | id, nombre, duración positiva, activo |
-| appointments | id, contact_id, professional_id, service_id, start_at, end_at, status, created_by, fechas de actualización |
+| appointments | id, contact_id, professional_id, service_id, start_at, end_at, status, nota corta, created_by, fechas de actualización |
 | follow_up_tasks | id, contact_id, appointment_id opcional, assigned_to, due_at, estado y texto administrativo limitado |
 | audit_events | actor, acción, tipo/id objetivo, instante y resultado necesario; sin credenciales ni contenido sensible completo |
 
@@ -207,11 +207,15 @@ Aceptadas por el alumno tras T01. Prevalecen sobre las propuestas abiertas de la
 **Recorrido del cliente y cuenta del portal**
 
 1. Fuera del CRM: anuncio → web de la clínica → WhatsApp. El CRM registra el origen del contacto.
-2. Recepción crea el contacto y la cita.
+2. Recepción pide el email, que es obligatorio, y crea el contacto y la cita (T21b). Una persona, un contacto: email y teléfono no se repiten. Un menor no tiene ficha: su cita va a nombre de su madre o padre, con una nota. Un hijo adulto tiene su propia ficha y su propio email. Un trabajador que también sea cliente usa otro email distinto del de su cuenta.
 3. Recepción o admin generan una invitación al portal para cualquier contacto salvo Perdido, con o sin citas (cambia en T21 la condición de T03, «al menos una cita»): enlace de un solo uso, ligado al contacto, que caduca a las 24 h (T21; T03 proponía 72 h). Generar otro anula el anterior. Recepción lo envía manualmente por WhatsApp; no hay envío automático de email en el núcleo.
-4. El cliente abre el enlace, indica su email (libre, sin precargar y sin cambiar la ficha) y elige su contraseña; después entra por el login y consulta sus citas. Recepción solo puede crear cuentas de rol cliente. Sin recuperación de contraseña en la demo: límite documentado en el README.
+4. El cliente abre el enlace, ve con qué email entrará (el de su ficha, T21b) y elige su contraseña; después entra por el login y consulta sus citas. Recepción solo puede crear cuentas de rol cliente. Si recepción corrige el email de la ficha, cambia también el de acceso y la contraseña sigue igual: así no se pierde el historial si el cliente pierde acceso a su correo. Sin recuperación de contraseña en la demo: límite documentado en el README.
 5. Plan B si falta tiempo: cuenta creada por admin con contraseña temporal y cambio obligatorio.
 
 **Alcance del portal (decisión del alumno, T21):** un CRM no necesita portal de cliente para ser útil, y la prioridad es el personal de la clínica. El portal se queda en lo mínimo (ver las citas propias): demuestra el acceso seguro a los datos de cada cliente y resuelve su identidad, que una reserva futura necesitaría. Se reconoce que, sin reserva, aporta poco al cliente final.
+
+**Notas (T21b):** la ficha y la cita admiten una nota corta, con aviso de no escribir datos clínicos. Las escriben admin y recepción, y la de la cita se edita con su propio botón, sin reprogramar. El profesional ve la de la ficha de sus contactos y la de sus citas. El cliente no las ve.
+
+**Comunicaciones:** tener el email de un cliente no autoriza a enviarle campañas. Antes de cualquier envío hará falta una casilla de autorización en el registro y revisar consentimiento y baja; no se construye ahora.
 
 **Ideas de ampliación tras el núcleo (decisión T21, sustituye al orden de T03):** PWA instalable, fotos antes/después y reserva por el cliente desde su portal. No tienen orden fijo: al cerrar el núcleo se mencionan y se elige por cuál empezar según lo que más convenga. Reservar sin registro previo (widget público) e integración con WhatsApp quedan para fases posteriores.

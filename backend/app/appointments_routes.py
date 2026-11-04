@@ -27,7 +27,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 from pydantic_core import PydanticCustomError
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -52,6 +52,7 @@ from app.validators import (
     START_FORMAT_MESSAGE,
     clinic_instant,
     normalize_cancel_note,
+    normalize_note,
     parse_local_start,
 )
 
@@ -118,10 +119,38 @@ class _WithStart(BaseModel):
         return user_message(parse_local_start)(value)
 
 
+def _clean_note(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise PydanticCustomError("dato_no_valido", "La nota debe ser texto")
+    return user_message(normalize_note)(value)
+
+
 class AppointmentCreate(_WithStart):
     contact_id: StrictInt
     service_id: StrictInt
     staff_id: StrictInt
+    note: str | None = None
+
+    @field_validator("note", mode="before")
+    @classmethod
+    def _note(cls, value: object) -> str | None:
+        return _clean_note(value)
+
+
+class AppointmentNote(BaseModel):
+    """Editar la nota (T21b), sin reprogramar: la nota, o null para quitarla, y la versión leída."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    version: StrictInt = Field(ge=1)
+    note: str | None
+
+    @field_validator("note", mode="before")
+    @classmethod
+    def _note(cls, value: object) -> str | None:
+        return _clean_note(value)
 
 
 class AppointmentReschedule(_WithStart):
@@ -190,6 +219,8 @@ class AppointmentOut(BaseModel):
     cancel_note: str | None
     # Cuándo se marcó la asistencia la primera vez (T20b), en la hora de la clínica.
     attended_at: datetime | None
+    # Nota interna (T21b): el portal del cliente no debe devolverla.
+    note: str | None
 
 
 class AgendaItem(AppointmentOut):
@@ -412,6 +443,7 @@ def create_appointment(
         ends_at=ends_at,
         duration_minutes=service.duration_minutes,
         created_by_id=user.id,
+        note=body.note,
     )
     db.add(appointment)
     try:
@@ -571,6 +603,40 @@ def mark_attendance(
     return _out(appointment, zone)
 
 
+@router.put(
+    "/{appointment_id}/note",
+    dependencies=[Depends(require_csrf)],
+    responses={
+        404: {"description": "La cita no existe"},
+        409: {"description": "Otra persona la cambió antes"},
+        422: {"description": "Nota no válida"},
+    },
+)
+def edit_note(
+    appointment_id: int,
+    body: AppointmentNote,
+    user: User = Depends(require_roles(Role.ADMIN, Role.RECEPTION)),
+    db: Session = Depends(get_db),
+) -> AppointmentOut:
+    """Editar la nota (T21b), en cualquier estado de la cita: no cambia nada más. Una sola sentencia
+    con la versión, como la edición de un contacto (T13); el texto no se registra en el log."""
+    statement = (
+        update(Appointment)
+        .where(Appointment.id == appointment_id, Appointment.version == body.version)
+        .values(note=body.note, version=Appointment.version + 1, updated_by_id=user.id, updated_at=func.now())
+        .returning(Appointment.id)
+    )
+    if db.execute(statement).scalar_one_or_none() is None:
+        db.rollback()
+        if db.get(Appointment, appointment_id) is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND_MESSAGE)
+        raise HTTPException(status.HTTP_409_CONFLICT, VERSION_CONFLICT_MESSAGE)
+    db.commit()
+    appointment = db.get(Appointment, appointment_id, populate_existing=True)
+    logger.info("Nota de la cita: id=%s por user_id=%s", appointment.id, user.id)
+    return _out(appointment, get_settings().clinic_zone)
+
+
 def _lock_for_attendance(
     db: Session, appointment_id: int, body: AppointmentAttendance, now: datetime, user: User
 ) -> tuple[Appointment, Contact]:
@@ -719,4 +785,5 @@ def _out(appointment: Appointment, zone: ZoneInfo) -> AppointmentOut:
         cancel_reason=appointment.cancel_reason,
         cancel_note=appointment.cancel_note,
         attended_at=appointment.attended_at.astimezone(zone) if appointment.attended_at else None,
+        note=appointment.note,
     )

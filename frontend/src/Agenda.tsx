@@ -20,6 +20,9 @@
 //
 // Asistencia (T20b): en las citas que ya han empezado, «Realizada» y «No presentado» (también en
 // «Mi agenda», para las suyas); durante 7 días desde que se marcó, el botón para corregirla.
+//
+// Nota (T21b): se escribe al dar la cita y se edita con su propio botón, sin reprogramar y en
+// cualquier estado. En «Mi agenda» solo se lee, y el cliente no la ve.
 
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router";
@@ -27,6 +30,7 @@ import { Link, useSearchParams } from "react-router";
 import {
   cancelarCita,
   crearCita,
+  editarNotaCita,
   ErrorApi,
   listarCitas,
   listarCitasEntre,
@@ -45,7 +49,7 @@ import {
   type PersonaServicio,
   type Servicio,
 } from "./api";
-import { formatoTelefono, PAUSA_BUSQUEDA_MS, ZONA_CLINICA } from "./Contactos";
+import { AVISO_NOTA, AVISO_TILDES, formatoTelefono, PAUSA_BUSQUEDA_MS, tieneTildes, ZONA_CLINICA } from "./Contactos";
 import { formatoDuracion } from "./Servicios";
 import { NOMBRE_ROL, useSesion } from "./sesion";
 
@@ -227,6 +231,7 @@ export default function Agenda({ propia = false }: { propia?: boolean }) {
   // se recarga, y la recarga trae su versión nueva si otra persona la cambió (409).
   const [enEdicion, setEnEdicion] = useState<CitaAgenda | null>(null);
   const [cancelando, setCancelando] = useState<number | null>(null);
+  const [editandoNota, setEditandoNota] = useState<number | null>(null);
   const [aviso, setAviso] = useState<string | null>(null);
 
   function cambiar(cambios: Record<string, string | null>) {
@@ -300,6 +305,40 @@ export default function Agenda({ propia = false }: { propia?: boolean }) {
           {!propia && ` · ${c.staff_email}`}
           {c.status !== "scheduled" && ` · ${estadoDe(c)}`}
         </span>
+        {c.note && editandoNota !== c.id && <span className="cita__meta">Nota: {c.note}</span>}
+        {!propia && editandoNota === c.id && (
+          <FormularioNota
+            cita={c}
+            alTerminar={(texto) => {
+              setEditandoNota(null);
+              limpiarMensajes();
+              setCreada(texto);
+              setRecarga((n) => n + 1);
+            }}
+            alConflicto={(texto) => {
+              setEditandoNota(null);
+              limpiarMensajes();
+              setAviso(texto);
+              setRecarga((n) => n + 1);
+            }}
+            alVolver={() => setEditandoNota(null)}
+          />
+        )}
+        {!propia && editandoNota !== c.id && (
+          <span className="cita__acciones">
+            <button
+              type="button"
+              className="enlace"
+              aria-label={`${c.note ? "Editar la nota" : "Añadir una nota"}: ${c.contact_name}, ${tramo(diaDeLaFila, c)}`}
+              onClick={() => {
+                limpiarMensajes();
+                setEditandoNota(c.id);
+              }}
+            >
+              {c.note ? "Editar nota" : "Añadir nota"}
+            </button>
+          </span>
+        )}
         {!propia && sePuedeCambiar(c) && cancelando !== c.id && (
           <span className="cita__acciones">
             <button
@@ -541,7 +580,7 @@ function Resumen({ citas }: { citas: CitaAgenda[] }) {
 // --- Formulario de cita ------------------------------------------------------------------
 
 type Elegido = { id: number; nombre: string };
-type Campo = "contact_id" | "service_id" | "staff_id" | "starts_at";
+type Campo = "contact_id" | "service_id" | "staff_id" | "starts_at" | "note";
 type EstadoServicios = { tipo: "cargando" } | { tipo: "error"; mensaje: string } | { tipo: "ok"; lista: Servicio[] };
 
 // Los Perdidos no pueden recibir cita (T16): no se ofrecen al buscar.
@@ -588,6 +627,7 @@ function FormularioCita({
   const [dia, setDia] = useState(inicial ? inicial.dia : diaInicial);
   const [hora, setHora] = useState(inicial ? String(Math.floor(inicial.minutos / 60)) : "9");
   const [minuto, setMinuto] = useState(inicial ? String(inicial.minutos % 60).padStart(2, "0") : "00");
+  const [nota, setNota] = useState("");
   const [ocupadas, setOcupadas] = useState<CitaAgenda[] | null>(null);
   const [delContacto, setDelContacto] = useState<CitaAgenda[]>([]);
   const [recargaOcupadas, setRecargaOcupadas] = useState(0);
@@ -701,6 +741,7 @@ function FormularioCita({
     if (!servicio && !cita) previos.service_id = "Elige el servicio";
     if (!personaId) previos.staff_id = "Elige quién la realiza";
     if (!diaValido(dia)) previos.starts_at = "Elige el día";
+    if (tieneTildes(nota)) previos.note = AVISO_TILDES;
     setErrores(previos);
     if (!contacto || Object.keys(previos).length) return;
     const startsAt = `${dia}T${hora.padStart(2, "0")}:${minuto}`;
@@ -711,7 +752,13 @@ function FormularioCita({
         guardada = await reprogramarCita(cita.id, { staff_id: Number(personaId), starts_at: startsAt, version: cita.version }, csrf);
       } else if (servicio) {
         guardada = await crearCita(
-          { contact_id: contacto.id, service_id: servicio.id, staff_id: Number(personaId), starts_at: startsAt },
+          {
+            contact_id: contacto.id,
+            service_id: servicio.id,
+            staff_id: Number(personaId),
+            starts_at: startsAt,
+            ...(nota.trim() ? { note: nota.trim() } : {}),
+          },
           csrf,
         );
       } else return;
@@ -935,6 +982,29 @@ function FormularioCita({
       <p className="ayuda">Hora de Nueva York.</p>
       {errorDe("starts_at")}
 
+      {/* Al reprogramar no: la nota tiene su propio botón en la fila (T21b). */}
+      {!cita && (
+        <div className="campo">
+          <label htmlFor="cita-nota">Nota (opcional)</label>
+          <input
+            id="cita-nota"
+            type="text"
+            value={nota}
+            maxLength={MAX_DETALLE}
+            aria-invalid={errores.note ? true : undefined}
+            aria-describedby={errores.note ? "error-note ayuda-nota" : "ayuda-nota"}
+            onChange={(e) => {
+              setNota(e.target.value);
+              quitarError("note");
+            }}
+          />
+          <span className="ayuda" id="ayuda-nota">
+            Por ejemplo, si la cita es para su hijo menor. {AVISO_NOTA}
+          </span>
+          {errorDe("note")}
+        </div>
+      )}
+
       {otrasOcupadas !== null && (
         <p className="ayuda" aria-live="polite">
           {otrasOcupadas.length
@@ -962,6 +1032,82 @@ function FormularioCita({
         <button type="button" className="secundario" onClick={alCancelar} disabled={guardando}>
           {/* Al reprogramar, «Cancelar» se confundiría con cancelar la cita. */}
           {cita ? "Volver" : "Cancelar"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+// --- Nota de la cita (T21b) ---------------------------------------------------------------------
+
+/** En la propia fila: la nota de la cita, sin tocar nada más. Vacía, la quita. */
+function FormularioNota({
+  cita,
+  alTerminar,
+  alConflicto,
+  alVolver,
+}: {
+  cita: CitaAgenda;
+  alTerminar: (texto: string) => void;
+  alConflicto: (texto: string) => void;
+  alVolver: () => void;
+}) {
+  const { estado, caducada } = useSesion();
+  const [nota, setNota] = useState(cita.note ?? "");
+  const [error, setError] = useState<string | null>(null);
+  const [guardando, setGuardando] = useState(false);
+  if (estado.tipo !== "dentro") return null;
+  const csrf = estado.usuario.csrf_token;
+
+  async function enviar(evento: FormEvent) {
+    evento.preventDefault();
+    if (tieneTildes(nota)) return setError(AVISO_TILDES);
+    setError(null);
+    setGuardando(true);
+    try {
+      await editarNotaCita(cita.id, { version: cita.version, note: nota.trim() || null }, csrf);
+      alTerminar(`Nota guardada: ${cita.contact_name}`);
+    } catch (e) {
+      setGuardando(false);
+      if (!(e instanceof ErrorApi)) return setError("Error inesperado");
+      if (e.status === 401) return caducada();
+      if (e.status === 409) return alConflicto(e.message);
+      if (e.status === 404) return alConflicto("Esta cita ya no existe");
+      setError(e.campos.note ?? e.message);
+    }
+  }
+
+  return (
+    <form className="formulario cancelar" onSubmit={enviar} noValidate aria-label="Nota de la cita">
+      <div className="campo">
+        <label htmlFor={`nota-${cita.id}`}>Nota</label>
+        <input
+          id={`nota-${cita.id}`}
+          type="text"
+          value={nota}
+          maxLength={MAX_DETALLE}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? `error-nota-${cita.id} ayuda-nota-${cita.id}` : `ayuda-nota-${cita.id}`}
+          onChange={(e) => {
+            setNota(e.target.value);
+            setError(null);
+          }}
+        />
+        <span className="ayuda" id={`ayuda-nota-${cita.id}`}>
+          {AVISO_NOTA}
+        </span>
+        {error && (
+          <span className="error" id={`error-nota-${cita.id}`} role="alert">
+            {error}
+          </span>
+        )}
+      </div>
+      <div className="acciones">
+        <button type="submit" disabled={guardando}>
+          {guardando ? "Guardando…" : "Guardar nota"}
+        </button>
+        <button type="button" className="secundario" onClick={alVolver} disabled={guardando}>
+          Volver
         </button>
       </div>
     </form>

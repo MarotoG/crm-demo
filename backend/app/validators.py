@@ -181,13 +181,27 @@ MAX_CANCEL_NOTE_LENGTH = 200
 _CANCEL_NOTE = re.compile(r"[ -~]+")
 
 
-def normalize_cancel_note(value: str) -> str | None:
-    """Detalle opcional de la cancelación: una línea sin espacios repetidos; vacío → sin detalle."""
+def _short_line(value: str, name: str) -> str | None:
     note = " ".join(value.split())
     if not note:
         return None
     if len(note) > MAX_CANCEL_NOTE_LENGTH:
-        raise ValueError(f"El detalle no puede tener más de {MAX_CANCEL_NOTE_LENGTH} caracteres")
+        raise ValueError(f"{name} no puede tener más de {MAX_CANCEL_NOTE_LENGTH} caracteres")
     if not _CANCEL_NOTE.fullmatch(note):
         raise ValueError(NO_ACCENTS_MESSAGE)
     return note
+
+
+def normalize_cancel_note(value: str) -> str | None:
+    """Detalle opcional de la cancelación: una línea sin espacios repetidos; vacío → sin detalle."""
+    return _short_line(value, "El detalle")
+
+
+# --- Notas de la ficha y de la cita (T21b) -------------------------------------------
+
+MAX_NOTE_LENGTH = MAX_CANCEL_NOTE_LENGTH
+
+
+def normalize_note(value: str) -> str | None:
+    """Nota opcional, con la misma forma que el detalle de una cancelación; vacía → sin nota."""
+    return _short_line(value, "La nota")

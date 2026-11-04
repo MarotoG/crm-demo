@@ -15,7 +15,7 @@ from app.models import Appointment, Contact, ContactStatus, PortalInvitation, Ro
 from app.security import hash_password, verify_password
 
 PASSWORD = "contraseña-de-prueba-larga"
-CLIENTE = {"email": "Ana.Cliente@Example.com", "password": "una-frase-bastante-larga"}
+CLAVE = "una-frase-bastante-larga"
 AHORA = datetime(2027, 1, 4, 15, 0, tzinfo=UTC)
 ENLACE_NO_VALE = "Este enlace no es válido o ha caducado. Pide uno nuevo a la clínica."
 
@@ -43,7 +43,7 @@ def usuarios(db) -> dict[Role, User]:
 
 
 def contacto(db, status: ContactStatus = ContactStatus.NEW, nombre: str = "Ana") -> Contact:
-    contact = Contact(first_name=nombre, last_name="Lopez", phone="+12125550123", source="instagram", status=status)
+    contact = Contact(first_name=nombre, last_name="Lopez", email=f"{nombre.lower()}@example.com", source="instagram", status=status)
     db.add(contact)
     db.flush()
     return contact
@@ -68,7 +68,7 @@ def token_de(contact_id: int) -> str:
 
 
 def aceptar(token: str, **cambios):
-    return TestClient(fastapi_app).post("/api/portal-invitations/accept", json={"token": token, **CLIENTE, **cambios})
+    return TestClient(fastapi_app).post("/api/portal-invitations/accept", json={"token": token, "password": CLAVE, **cambios})
 
 
 def comprobar(token: str):
@@ -205,10 +205,10 @@ def test_aceptar_crea_una_cuenta_de_cliente_vinculada_y_con_login(db, usuarios):
     response = aceptar(token_de(contact.id))
 
     assert response.status_code == 204 and response.content == b""
-    user = db.scalar(select(User).where(User.email == "ana.cliente@example.com"))
+    user = db.scalar(select(User).where(User.email == "ana@example.com"))
     assert user.role == Role.CLIENT and user.active and user.contact_id == contact.id
-    assert user.password_hash.startswith("$argon2id$") and verify_password(user.password_hash, CLIENTE["password"])
-    login = TestClient(fastapi_app).post("/api/auth/login", json=CLIENTE)
+    assert user.password_hash.startswith("$argon2id$") and verify_password(user.password_hash, CLAVE)
+    login = TestClient(fastapi_app).post("/api/auth/login", json={"email": "ana@example.com", "password": CLAVE})
     assert login.status_code == 200 and login.json()["role"] == "client"
 
 
@@ -222,7 +222,7 @@ def test_el_enlace_reutilizado_se_rechaza(db, usuarios):
     token = token_de(contacto(db).id)
     assert aceptar(token).status_code == 204
 
-    response = aceptar(token, email="otra@example.com")
+    response = aceptar(token, password="otra-frase-bastante-larga")
 
     assert response.status_code == 410 and response.json()["detail"] == ENLACE_NO_VALE
     assert comprobar(token).status_code == 410
@@ -233,7 +233,7 @@ def test_caduca_justo_a_las_24_horas(db, usuarios):
     token = token_de(contacto(db).id)
 
     poner_reloj(AHORA + timedelta(hours=24) - timedelta(seconds=1))
-    assert comprobar(token).status_code == 204
+    assert comprobar(token).status_code == 200
 
     poner_reloj(AHORA + timedelta(hours=24))
     assert comprobar(token).status_code == 410
@@ -263,23 +263,14 @@ def test_marcar_perdido_despues_invalida_el_enlace(db, usuarios):
 
 
 @pytest.mark.parametrize(
-    "extra", [{"role": "admin"}, {"contact_id": 1}, {"active": False}, {"id": 1}]
+    "extra", [{"role": "admin"}, {"contact_id": 1}, {"active": False}, {"id": 1}, {"email": "otra@example.com"}]
 )
-def test_el_navegador_no_fija_rol_ni_contacto(db, usuarios, extra):
+def test_el_navegador_no_fija_rol_contacto_ni_email(db, usuarios, extra):
     token = token_de(contacto(db).id)
 
     assert aceptar(token, **extra).status_code == 422
     assert clientes(db) == []
-    assert comprobar(token).status_code == 204  # el enlace sigue valiendo
-
-
-@pytest.mark.parametrize("email", ["sin-arroba", "", "ana@clinica", "añó@example.com"])
-def test_email_no_valido(db, usuarios, email):
-    response = aceptar(token_de(contacto(db).id), email=email)
-
-    assert response.status_code == 422
-    assert error_de(response, "email")
-    assert clientes(db) == []
+    assert comprobar(token).status_code == 200  # el enlace sigue valiendo
 
 
 @pytest.mark.parametrize("password", ["corta", "x" * 11, "x" * 1025])
@@ -295,31 +286,155 @@ def test_contrasena_justo_de_12_vale(db, usuarios):
     assert aceptar(token_de(contacto(db).id), password="x" * 12).status_code == 204
 
 
-@pytest.mark.parametrize("email", ["reception@prueba.example.com", "RECEPTION@prueba.example.com"])
-def test_email_en_uso_avisa_y_el_enlace_sigue_valiendo(db, usuarios, email):
-    token = token_de(contacto(db).id)
+def _cuenta_con_el_email_de(db, contact: Contact) -> User:
+    """Otra cuenta aparecida después con ese email: la API ya no lo deja crear, pero sí un comando."""
+    otra = User(email=contact.email, password_hash=hash_password(PASSWORD), role=Role.ADMIN)
+    db.add(otra)
+    db.commit()  # sobrevive al rollback que hace la API al fallar; el fixture deshace todo al final
+    return otra
 
-    response = aceptar(token, email=email)
+
+def test_si_ya_hay_una_cuenta_con_ese_email_avisa_y_el_enlace_sigue_valiendo(db, usuarios):
+    contact = contacto(db)
+    token = token_de(contact.id)
+    otra = _cuenta_con_el_email_de(db, contact)
+
+    response = aceptar(token)
 
     assert response.status_code == 409
-    assert response.json()["detail"] == "Ese email ya está en uso: escribe otro"
+    assert response.json()["detail"] == "Ya hay una cuenta con este email. Escribe a la clínica para resolverlo."
+    assert clientes(db) == []
+    db.delete(otra)
+    db.flush()
     assert aceptar(token).status_code == 204
 
 
 def test_un_enlace_no_cambia_la_contrasena_de_una_cuenta_que_ya_existe(db, usuarios):
-    token = token_de(contacto(db).id)
+    contact = contacto(db)
+    token = token_de(contact.id)
+    otra = _cuenta_con_el_email_de(db, contact)
 
-    aceptar(token, email="admin@prueba.example.com")
+    aceptar(token)
 
-    assert verify_password(db.scalar(select(User).where(User.role == Role.ADMIN)).password_hash, PASSWORD)
+    db.refresh(otra)
+    assert verify_password(otra.password_hash, PASSWORD) and not verify_password(otra.password_hash, CLAVE)
 
 
-def test_dos_contactos_de_una_familia_necesitan_emails_distintos(db, usuarios):
-    assert aceptar(token_de(contacto(db).id)).status_code == 204
+# --- Corregir el email de la ficha (T21b) -------------------------------------------
 
-    response = aceptar(token_de(contacto(db, nombre="Bea").id))
+
+def editar_email(contact: Contact, email: str, role: Role = Role.RECEPTION):
+    client, csrf = sesion_de(role)
+    cuerpo = {
+        "first_name": contact.first_name, "last_name": contact.last_name, "email": email, "phone": None,
+        "source": contact.source, "owner_id": None, "version": contact.version,
+    }
+    return client.put(f"/api/contacts/{contact.id}", json=cuerpo, headers=csrf)
+
+
+def entrar(email: str, password: str = CLAVE):
+    return TestClient(fastapi_app).post("/api/auth/login", json={"email": email, "password": password})
+
+
+@pytest.mark.parametrize("role", [Role.ADMIN, Role.RECEPTION])
+def test_corregir_el_email_cambia_el_de_acceso_y_la_contrasena_sigue_igual(db, usuarios, role):
+    contact = contacto(db)
+    assert aceptar(token_de(contact.id)).status_code == 204
+    cita = _cita(db, contact, usuarios[Role.PROFESSIONAL], AHORA + timedelta(days=1))
+
+    assert editar_email(contact, " Nuevo@Example.com ", role).status_code == 200
+
+    assert entrar("nuevo@example.com").status_code == 200
+    assert entrar("ana@example.com").status_code == 401
+    usuario = db.scalar(select(User).where(User.email == "nuevo@example.com"))
+    assert usuario.contact_id == contact.id
+    db.refresh(cita)
+    assert cita.contact_id == contact.id  # su historial sigue en la misma ficha
+
+
+def test_corregir_el_email_de_un_cliente_no_toca_la_cuenta_de_otro(db, usuarios):
+    ana, bea = contacto(db), contacto(db, nombre="Bea")
+    assert aceptar(token_de(ana.id)).status_code == 204
+    assert aceptar(token_de(bea.id)).status_code == 204
+
+    assert editar_email(ana, "nuevo@example.com").status_code == 200
+
+    assert entrar("nuevo@example.com").status_code == 200
+    assert entrar("bea@example.com").status_code == 200
+
+
+def test_corregir_el_email_de_quien_no_tiene_cuenta_solo_cambia_la_ficha(db, usuarios):
+    contact = contacto(db)
+    token = token_de(contact.id)
+
+    assert editar_email(contact, "nuevo@example.com").status_code == 200
+
+    db.refresh(contact)
+    assert contact.email == "nuevo@example.com"
+    assert comprobar(token).json() == {"email": "nuevo@example.com"}  # el enlace abierto usa el nuevo
+    assert aceptar(token).status_code == 204
+    assert entrar("nuevo@example.com").status_code == 200
+
+
+def test_guardar_la_ficha_sin_cambiar_el_email_no_choca_con_su_propia_cuenta(db, usuarios):
+    contact = contacto(db)
+    assert aceptar(token_de(contact.id)).status_code == 204
+
+    assert editar_email(contact, contact.email).status_code == 200
+
+
+@pytest.mark.parametrize("email", ["admin@prueba.example.com", "ADMIN@prueba.example.com"])
+def test_no_se_corrige_a_un_email_de_una_cuenta_interna(db, usuarios, email):
+    contact = contacto(db)
+    assert aceptar(token_de(contact.id)).status_code == 204
+
+    response = editar_email(contact, email)
+
+    assert response.status_code == 422
+    assert entrar("ana@example.com").status_code == 200
+    db.refresh(contact)
+    assert contact.email == "ana@example.com" and contact.version == 1
+
+
+def test_no_se_corrige_al_email_de_otro_contacto_y_no_cambia_nada(db, usuarios):
+    ana, bea = contacto(db), contacto(db, nombre="Bea")
+    assert aceptar(token_de(ana.id)).status_code == 204
+
+    response = editar_email(ana, bea.email)
 
     assert response.status_code == 409
+    assert entrar("ana@example.com").status_code == 200
+    assert entrar("bea@example.com").status_code == 401
+
+
+def test_si_falla_la_cuenta_tampoco_cambia_la_ficha(db, usuarios, monkeypatch):
+    """Ficha y cuenta, las dos o ninguna: la regla previa no ve la cuenta y salta la de la BD."""
+    from app import contacts_routes
+
+    contact = contacto(db)
+    assert aceptar(token_de(contact.id)).status_code == 204
+    monkeypatch.setattr(contacts_routes, "_check_email_free", lambda *a, **k: None)
+
+    response = editar_email(contact, "admin@prueba.example.com")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Ese email ya es de una cuenta de la clínica: usa otro"
+    db.expire_all()
+    assert db.get(Contact, contact.id).email == "ana@example.com"
+    assert entrar("ana@example.com").status_code == 200
+
+
+def test_un_cliente_de_baja_conserva_el_vinculo_al_cambiar_el_email(db, usuarios):
+    contact = contacto(db)
+    assert aceptar(token_de(contact.id)).status_code == 204
+    usuario = clientes(db)[0]
+    usuario.active = False
+    db.flush()
+
+    assert editar_email(contact, "nuevo@example.com").status_code == 200
+
+    db.refresh(usuario)
+    assert usuario.email == "nuevo@example.com" and not usuario.active
 
 
 def test_el_enlace_de_un_contacto_vincula_solo_a_ese_contacto(db, usuarios):
@@ -332,13 +447,23 @@ def test_el_enlace_de_un_contacto_vincula_solo_a_ese_contacto(db, usuarios):
     assert [user.contact_id for user in clientes(db)] == [bea.id]
 
 
-def test_comprobar_no_revela_datos_ni_gasta_el_enlace(db, usuarios):
+def test_comprobar_solo_da_el_email_y_no_gasta_el_enlace(db, usuarios):
     token = token_de(contacto(db).id)
 
     response = comprobar(token)
 
-    assert response.status_code == 204 and response.content == b""
-    assert comprobar(token).status_code == 204
+    assert response.status_code == 200
+    assert response.json() == {"email": "ana@example.com"}
+    assert comprobar(token).status_code == 200
+
+
+def test_un_enlace_no_valido_no_revela_el_email(db, usuarios):
+    contact = contacto(db)
+    token = token_de(contact.id)
+    assert aceptar(token).status_code == 204
+
+    for response in (comprobar(token), comprobar("inventado")):
+        assert response.status_code == 410 and contact.email not in response.text
 
 
 # --- Reglas en la propia BD -------------------------------------------------------

@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_core import PydanticCustomError
 from sqlalchemy import ColumnElement, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
@@ -21,16 +21,18 @@ from app.auth import require_csrf, require_roles
 from app.db import get_db
 from app.errors import field_error, user_message
 from app.models import Appointment, Contact, ContactSource, ContactStatus, Role, User
-from app.validators import normalize_contact_email, normalize_name, normalize_phone
+from app.validators import normalize_contact_email, normalize_name, normalize_note, normalize_phone
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/contacts", tags=["contactos"])
 
-# Qué regla de duplicados ha saltado, según el índice único de PostgreSQL.
+# Qué regla de duplicados ha saltado, según la restricción única de PostgreSQL.
+ACCOUNT_EMAIL_MESSAGE = "Ese email ya es de una cuenta de la clínica: usa otro"
 DUPLICATE_MESSAGES = {
-    "uq_contacts_name_email": "Ya existe un contacto con ese nombre, apellidos y email",
-    "uq_contacts_name_phone": "Ya existe un contacto con ese nombre, apellidos y teléfono",
+    "uq_contacts_email": "Ya existe un contacto con ese email",
+    "uq_contacts_phone": "Ya existe un contacto con ese teléfono",
+    "uq_users_email": ACCOUNT_EMAIL_MESSAGE,
 }
 VERSION_CONFLICT_MESSAGE = "Otra persona ha cambiado esta ficha mientras la editabas"
 NOT_FOUND_MESSAGE = "Contacto no encontrado"
@@ -70,9 +72,10 @@ class ContactCreate(BaseModel):
 
     first_name: str
     last_name: str
-    email: str | None = None
+    email: str  # obligatorio y único (decisión T21b)
     phone: str | None = None
     source: ContactSource
+    note: str | None = None
 
     @field_validator("first_name")
     @classmethod
@@ -84,7 +87,7 @@ class ContactCreate(BaseModel):
     def _last_name(cls, value: str) -> str:
         return user_message(lambda v: normalize_name(v, "apellido"))(value)
 
-    @field_validator("email", "phone", mode="before")
+    @field_validator("phone", mode="before")
     @classmethod
     def _empty_is_none(cls, value: object) -> object:
         # Un campo vacío del formulario equivale a no darlo.
@@ -92,19 +95,20 @@ class ContactCreate(BaseModel):
 
     @field_validator("email")
     @classmethod
-    def _email(cls, value: str | None) -> str | None:
-        return None if value is None else user_message(normalize_contact_email)(value)
+    def _email(cls, value: str) -> str:
+        if not value.strip():
+            raise PydanticCustomError("dato_no_valido", "Indica el email")
+        return user_message(normalize_contact_email)(value)
 
     @field_validator("phone")
     @classmethod
     def _phone(cls, value: str | None) -> str | None:
         return None if value is None else user_message(normalize_phone)(value)
 
-    @model_validator(mode="after")
-    def _email_or_phone(self) -> "ContactCreate":
-        if self.email is None and self.phone is None:
-            raise PydanticCustomError("falta_contacto", "Indica al menos un email o un teléfono")
-        return self
+    @field_validator("note")
+    @classmethod
+    def _note(cls, value: str | None) -> str | None:
+        return None if value is None else user_message(normalize_note)(value)
 
 
 class ContactUpdate(ContactCreate):
@@ -160,6 +164,7 @@ class ContactDetail(ContactOut):
     updated_at: datetime
     created_by_email: str | None
     updated_by_email: str | None
+    note: str | None
 
 
 def _detail(db: Session, contact: Contact) -> ContactDetail:
@@ -174,11 +179,22 @@ def _detail(db: Session, contact: Contact) -> ContactDetail:
         updated_at=contact.updated_at,
         created_by_email=email_of(contact.created_by_id),
         updated_by_email=email_of(contact.updated_by_id),
+        note=contact.note,
     )
 
 
+def _check_email_free(db: Session, email: str, contact_id: int | None = None) -> None:
+    """Un email no puede ser a la vez de otra cuenta (decisión T21b), como la de un trabajador que
+    también sea cliente: usará otro. La cuenta de este mismo contacto sí puede tenerlo."""
+    query = select(User.id).where(User.email == email)
+    if contact_id is not None:
+        query = query.where(User.contact_id.is_distinct_from(contact_id))
+    if db.scalar(query) is not None:
+        raise field_error("email", ACCOUNT_EMAIL_MESSAGE)
+
+
 def _duplicate_or_raise(error: IntegrityError) -> HTTPException:
-    """409 si ha saltado un índice de duplicados; cualquier otro error de integridad sigue su curso."""
+    """409 si ha saltado una regla de duplicados; cualquier otro error de integridad sigue su curso."""
     constraint = getattr(getattr(error.orig, "diag", None), "constraint_name", None)
     if constraint in DUPLICATE_MESSAGES:
         return HTTPException(status.HTTP_409_CONFLICT, DUPLICATE_MESSAGES[constraint])
@@ -269,6 +285,7 @@ def create_contact(
     user: User = Depends(require_roles(Role.ADMIN, Role.RECEPTION)),
     db: Session = Depends(get_db),
 ) -> ContactOut:
+    _check_email_free(db, body.email)
     # Responsable por defecto: quien lo crea (decisión T14).
     contact = Contact(**body.model_dump(), created_by_id=user.id, owner_id=user.id)
     db.add(contact)
@@ -327,6 +344,7 @@ def update_contact(
     # cuenta se haya desactivado después.
     if body.owner_id is not None and body.owner_id != current.owner_id and not _valid_owner(db, body.owner_id):
         raise field_error("owner_id", OWNER_NOT_VALID_MESSAGE)
+    _check_email_free(db, body.email, contact_id)
     # Bloqueo optimista en una sola sentencia: solo se actualiza si la versión sigue siendo la
     # que leyó quien edita. Con dos ediciones a la vez, PostgreSQL bloquea la fila: la segunda
     # espera, vuelve a mirar la versión (ya subida) y no actualiza nada.
@@ -343,6 +361,10 @@ def update_contact(
     )
     try:
         updated = db.execute(statement).scalar_one_or_none()
+        # El email de acceso es el de la ficha (T21b): cambia con él, en la misma transacción, y la
+        # contraseña sigue igual. Quien acepta una invitación a la vez bloquea este contacto antes.
+        if updated is not None:
+            db.execute(update(User).where(User.contact_id == contact_id).values(email=body.email))
     except IntegrityError as error:
         db.rollback()
         raise _duplicate_or_raise(error) from None
