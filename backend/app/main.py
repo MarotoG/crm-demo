@@ -16,6 +16,7 @@ from app.auth_routes import router as auth_router
 from app.contacts_routes import router as contacts_router
 from app.db import get_database_check
 from app.invitations_routes import router as invitations_router
+from app.portal_routes import router as portal_router
 from app.services_routes import router as services_router
 from app.users_routes import router as users_router
 
@@ -28,6 +29,7 @@ app.include_router(contacts_router)
 app.include_router(services_router)
 app.include_router(appointments_router)
 app.include_router(invitations_router)
+app.include_router(portal_router)
 
 
 @app.exception_handler(OperationalError)

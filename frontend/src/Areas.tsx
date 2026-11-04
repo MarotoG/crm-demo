@@ -168,21 +168,6 @@ export function Usuarios() {
   );
 }
 
-/** Área del cliente: de momento, solo la bienvenida (el portal llega en T21-T23). */
-export function Bienvenida() {
-  const { estado } = useSesion();
-  if (estado.tipo !== "dentro") return null;
-  return (
-    <section className="tarjeta">
-      <h2>Área de {NOMBRE_ROL[estado.usuario.role].toLowerCase()}</h2>
-      <p>
-        Hola, {estado.usuario.email}. Las funciones de esta área (contactos, agenda, portal) llegarán en próximas
-        tareas.
-      </p>
-    </section>
-  );
-}
-
 export function NoEncontrada() {
   return (
     <main className="pagina">

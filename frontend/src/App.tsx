@@ -7,11 +7,12 @@
 import { Route, Routes } from "react-router";
 
 import Agenda from "./Agenda";
-import { Bienvenida, ConPermiso, Inicio, NoEncontrada, RedirigirFicha, RutaProtegida, Usuarios } from "./Areas";
+import { ConPermiso, Inicio, NoEncontrada, RedirigirFicha, RutaProtegida, Usuarios } from "./Areas";
 import Contactos from "./Contactos";
 import FichaContacto from "./FichaContacto";
 import Invitacion from "./Invitacion";
 import Login from "./Login";
+import Portal from "./Portal";
 import Servicios, { MisServicios } from "./Servicios";
 import { SesionProvider } from "./sesion";
 
@@ -30,7 +31,7 @@ export default function App() {
           <Route path="/usuarios" element={<ConPermiso seccion="usuarios"><Usuarios /></ConPermiso>} />
           <Route path="/mi-agenda" element={<ConPermiso seccion="miAgenda"><Agenda propia /></ConPermiso>} />
           <Route path="/mis-servicios" element={<ConPermiso seccion="misServicios"><MisServicios /></ConPermiso>} />
-          <Route path="/portal" element={<ConPermiso seccion="portal"><Bienvenida /></ConPermiso>} />
+          <Route path="/portal" element={<ConPermiso seccion="portal"><Portal /></ConPermiso>} />
           {/* Direcciones antiguas (antes de T18; /profesional, antes de T20): llevan a la nueva para no romper enlaces guardados. */}
           <Route path="/profesional" element={<Inicio />} />
           <Route path="/admin" element={<Inicio />} />

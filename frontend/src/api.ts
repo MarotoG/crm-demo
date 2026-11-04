@@ -403,6 +403,18 @@ export function listarCitasDeContacto(contacto: number): Promise<{ total: number
   return peticion(`/api/appointments/by-contact/${contacto}`);
 }
 
+// --- Portal del cliente (T22) ----------------------------------------------------
+
+/** Lo que el cliente sabe de una cita: sin notas, motivo ni quién la realiza. */
+export type CitaPortal = { id: number; service_name: string; starts_at: string; ends_at: string; status: EstadoCita };
+
+export type MisCitas = { upcoming: CitaPortal[]; past: CitaPortal[]; past_total: number };
+
+/** Las citas de quien tiene la sesión: no se envía ningún dato que diga de quién son. */
+export function listarMisCitas(): Promise<MisCitas> {
+  return peticion<MisCitas>("/api/portal/appointments");
+}
+
 // --- Invitación al portal (T21) ------------------------------------------------
 
 export type EstadoPortal = { has_account: boolean; invitation_expires_at: string | null };

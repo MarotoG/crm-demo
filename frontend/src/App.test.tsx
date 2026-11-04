@@ -190,7 +190,7 @@ describe("secciones por rol (T18)", () => {
     conSesion({ ...RECEPCION, role: "client" });
     abrir("/");
 
-    expect(await screen.findByRole("heading", { name: "Área de cliente" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Mis citas" })).toBeTruthy();
     expect(screen.queryByRole("navigation", { name: "Secciones" })).toBeNull();
   });
 

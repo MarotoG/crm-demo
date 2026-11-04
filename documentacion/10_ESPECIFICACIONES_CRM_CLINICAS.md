@@ -214,6 +214,8 @@ Aceptadas por el alumno tras T01. Prevalecen sobre las propuestas abiertas de la
 
 **Alcance del portal (decisión del alumno, T21):** un CRM no necesita portal de cliente para ser útil, y la prioridad es el personal de la clínica. El portal se queda en lo mínimo (ver las citas propias): demuestra el acceso seguro a los datos de cada cliente y resuelve su identidad, que una reserva futura necesitaría. Se reconoce que, sin reserva, aporta poco al cliente final.
 
+**Portal (T22 y T23):** el cliente ve sus próximas citas y las anteriores, con servicio, día, hora y estado real (también Cancelada y No presentado), en solo lectura. No ve quién la realiza (las cuentas internas aún no tienen nombre: se decidirá más adelante si se añade), motivo ni notas. Un contacto Perdido conserva el acceso: esa etiqueta es interna y el portal no la revela. Solo hay lista, sin página de detalle.
+
 **Notas (T21b):** la ficha y la cita admiten una nota corta, con aviso de no escribir datos clínicos. Las escriben admin y recepción, y la de la cita se edita con su propio botón, sin reprogramar. El profesional ve la de la ficha de sus contactos y la de sus citas. El cliente no las ve.
 
 **Comunicaciones:** tener el email de un cliente no autoriza a enviarle campañas. Antes de cualquier envío hará falta una casilla de autorización en el registro y revisar consentimiento y baja; no se construye ahora.
