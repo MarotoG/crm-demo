@@ -7,7 +7,16 @@
 
 import type { Rol } from "./api";
 
-export type Seccion = "agenda" | "contactos" | "ficha" | "servicios" | "usuarios" | "miAgenda" | "misServicios" | "portal";
+export type Seccion =
+  | "agenda"
+  | "contactos"
+  | "ficha"
+  | "servicios"
+  | "usuarios"
+  | "miAgenda"
+  | "misServicios"
+  | "pendientes"
+  | "portal";
 
 // `enBarra: false`: una página a la que se llega desde otra (la ficha), no una sección de la barra.
 type DatosSeccion = { ruta: string; nombre: string; roles: readonly Rol[]; enBarra?: false };
@@ -24,6 +33,7 @@ export const SECCIONES: Record<Seccion, DatosSeccion> = {
   usuarios: { ruta: "/usuarios", nombre: "Usuarios", roles: ["admin"] },
   miAgenda: { ruta: "/mi-agenda", nombre: "Mi agenda", roles: ["professional"] },
   misServicios: { ruta: "/mis-servicios", nombre: "Mis servicios", roles: ["professional"] },
+  pendientes: { ruta: "/pendientes", nombre: "Pendientes", roles: ["admin", "reception", "professional"] },
   portal: { ruta: "/portal", nombre: "Mis citas", roles: ["client"] },
 };
 

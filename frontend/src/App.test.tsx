@@ -152,8 +152,8 @@ describe("secciones por rol (T18)", () => {
   });
 
   it.each([
-    [RECEPCION, ["Agenda", "Contactos", "Servicios"]],
-    [ADMIN, ["Agenda", "Contactos", "Servicios", "Usuarios"]],
+    [RECEPCION, ["Agenda", "Contactos", "Servicios", "Pendientes"]],
+    [ADMIN, ["Agenda", "Contactos", "Servicios", "Usuarios", "Pendientes"]],
   ])("la barra de secciones depende del rol (%#)", async (cuenta, secciones) => {
     conSesion(cuenta);
     abrir("/agenda");
@@ -163,13 +163,13 @@ describe("secciones por rol (T18)", () => {
     expect(within(barra).getByRole("link", { name: "Agenda" }).getAttribute("aria-current")).toBe("page");
   });
 
-  it("el profesional entra en «Mi agenda» y su barra tiene «Mi agenda» y «Mis servicios» (T20)", async () => {
+  it("el profesional entra en «Mi agenda» y su barra tiene «Mi agenda», «Mis servicios» y «Pendientes» (T20, T25)", async () => {
     conSesion({ ...RECEPCION, role: "professional" });
     abrir("/");
 
     expect(await screen.findByRole("heading", { name: "Mi agenda" })).toBeTruthy();
     const barra = screen.getByRole("navigation", { name: "Secciones" });
-    expect(within(barra).getAllByRole("link").map((a) => a.textContent)).toEqual(["Mi agenda", "Mis servicios"]);
+    expect(within(barra).getAllByRole("link").map((a) => a.textContent)).toEqual(["Mi agenda", "Mis servicios", "Pendientes"]);
   });
 
   it("la dirección de antes de T20 (/profesional) lleva a «Mi agenda»", async () => {

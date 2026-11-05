@@ -90,7 +90,7 @@ Provisionar cuentas de demo mediante un procedimiento reproducible. El vínculo 
 | contacts | id, nombre, email obligatorio y único, teléfono opcional y único, nota corta, origen, estado comercial, responsable, fechas; sin alergias, DOB ni historia clínica en el núcleo |
 | services | id, nombre, duración positiva, activo |
 | appointments | id, contact_id, professional_id, service_id, start_at, end_at, status, nota corta, created_by, fechas de actualización |
-| follow_up_tasks | id, contact_id, assigned_to, due_on (fecha, sin hora), texto administrativo limitado, created_by, created_at; sin enlace a una cita (decisión T24); el estado llega con T25 |
+| follow_up_tasks | id, contact_id, assigned_to, due_on (fecha, sin hora), texto administrativo limitado, created_by, created_at, completed_at, completed_by, version; sin enlace a una cita (decisión T24) |
 | audit_events | actor, acción, tipo/id objetivo, instante y resultado necesario; sin credenciales ni contenido sensible completo |
 
 Un lead y un cliente son estados/relaciones del mismo contacto, no dos fichas duplicadas. La regla exacta de conversión se acuerda; no crear un paciente clínico automáticamente por cualquier visita al widget. Cada contacto puede tener muchas citas/seguimientos; una cuenta de cliente solo está vinculada a su contacto.
@@ -216,7 +216,9 @@ Aceptadas por el alumno tras T01. Prevalecen sobre las propuestas abiertas de la
 
 **Portal (T22 y T23):** el cliente ve sus próximas citas y las anteriores, con servicio, día, hora y estado real (también Cancelada y No presentado), en solo lectura. No ve quién la realiza (las cuentas internas aún no tienen nombre: se decidirá más adelante si se añade), motivo ni notas. Un contacto Perdido conserva el acceso: esa etiqueta es interna y el portal no la revela. Solo hay lista, sin página de detalle.
 
-**Tareas de seguimiento (T24):** las crean admin y recepción desde la ficha, ligadas solo al contacto, con una descripción corta sin datos clínicos, una fecha prevista sin hora y un responsable. Pueden ser responsables las cuentas activas de administración y recepción, y un profesional solo si el contacto tiene alguna cita con él, también cancelada: así la tarea no le exige abrir una ficha que no puede ver. El profesional solo ve las suyas y no crea tareas; el cliente no las ve.
+**Tareas de seguimiento (T24):** las crean admin y recepción desde la ficha, ligadas solo al contacto, con una descripción corta sin datos clínicos, una fecha prevista sin hora y un responsable. Pueden ser responsables las cuentas activas de administración y recepción, y un profesional solo si el contacto tiene alguna cita con él, también cancelada: así la tarea no le exige abrir una ficha que no puede ver. El profesional solo ve las suyas y no crea tareas; el cliente no las ve. Un contacto Perdido admite tareas (decisión del alumno), porque son recordatorios internos; citas e invitaciones siguen exigiendo reabrirlo.
+
+**Panel de pendientes (T25):** sección «Pendientes» con un contador de vencidas y de hoy; es el aviso dentro del CRM, sin push. Admin y recepción ven las de toda la clínica, con filtro por persona y «Solo mías», y completan, reabren, editan y reasignan cualquiera; el profesional ve, completa y reabre solo las suyas, y no edita. Las reglas de responsable y fecha se aplican a lo que cambia, así que una vencida se reasigna sin moverle la fecha. «Reabrir» no tiene plazo. Una tarea hecha no se edita hasta reabrirla. Queda quién la marcó por última vez; el historial, en T26. Dos cambios a la vez sobre la misma tarea: gana el primero y el otro recibe 409.
 
 **Notas (T21b):** la ficha y la cita admiten una nota corta, con aviso de no escribir datos clínicos. Las escriben admin y recepción, y la de la cita se edita con su propio botón, sin reprogramar. El profesional ve la de la ficha de sus contactos y la de sus citas. El cliente no las ve.
 

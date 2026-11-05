@@ -377,7 +377,7 @@ def test_se_ven_las_20_mas_cercanas_con_el_total(db, recepcion):
 def test_contacto_sin_tareas_da_lista_vacia(db, recepcion):
     client, _ = sesion(recepcion)
 
-    assert client.get(f"/api/contacts/{contacto(db).id}/follow-ups").json() == {"total": 0, "items": []}
+    assert client.get(f"/api/contacts/{contacto(db).id}/follow-ups").json() == {"today": "2027-01-04", "total": 0, "items": []}
 
 
 def test_contacto_que_no_existe_da_404(db, recepcion):

@@ -408,19 +408,53 @@ export function listarCitasDeContacto(contacto: number): Promise<{ total: number
 export type TareaSeguimiento = {
   id: number;
   contact_id: number;
+  contact_name: string;
+  contact_status: EstadoContacto;
   description: string;
   due_on: string; // día de la clínica, AAAA-MM-DD
   assigned_to_id: number;
   assigned_to_email: string;
   created_by_email: string | null;
   created_at: string;
+  completed_at: string | null; // null: pendiente (T25)
+  completed_by_email: string | null;
+  version: number;
 };
 
 export type NuevaTarea = { description: string; due_on: string; assigned_to_id: number };
 
-/** Las 20 de fecha más cercana y el total. El profesional, solo las suyas. */
-export function listarTareas(contacto: number): Promise<{ total: number; items: TareaSeguimiento[] }> {
+/** `today` es el día de la clínica según la API: con él se ve cuáles están vencidas. */
+export type ListaTareas = { today: string; total: number; items: TareaSeguimiento[] };
+
+/** Las de un contacto: pendientes y después hechas, por fecha; las 20 primeras y el total. El
+ * profesional, solo las suyas. */
+export function listarTareas(contacto: number): Promise<ListaTareas> {
   return peticion(`/api/contacts/${contacto}/follow-ups`);
+}
+
+/** El panel (T25): las 50 pendientes más cercanas o las 50 hechas más recientes. El profesional,
+ * solo las suyas; pedir las de otra persona es 403. */
+export function listarPanelTareas(estado: "pending" | "done", persona?: number): Promise<ListaTareas> {
+  const parametros = new URLSearchParams({ state: estado });
+  if (persona !== undefined) parametros.set("assigned_to_id", String(persona));
+  return peticion(`/api/follow-ups?${parametros}`);
+}
+
+/** Para el contador de la barra: las pendientes vencidas y las de hoy. */
+export function resumenTareas(): Promise<{ overdue: number; due_today: number }> {
+  return peticion("/api/follow-ups/summary");
+}
+
+export function completarTarea(id: number, version: number, csrf: string): Promise<TareaSeguimiento> {
+  return peticion(`/api/follow-ups/${id}/complete`, { method: "POST", cuerpo: { version }, csrf });
+}
+
+export function reabrirTarea(id: number, version: number, csrf: string): Promise<TareaSeguimiento> {
+  return peticion(`/api/follow-ups/${id}/reopen`, { method: "POST", cuerpo: { version }, csrf });
+}
+
+export function editarTarea(id: number, datos: NuevaTarea & { version: number }, csrf: string): Promise<TareaSeguimiento> {
+  return peticion(`/api/follow-ups/${id}`, { method: "PUT", cuerpo: datos, csrf });
 }
 
 /** A quién se puede asignar: administración, recepción y los profesionales con cita con el contacto. */

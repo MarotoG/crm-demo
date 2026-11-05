@@ -4,11 +4,12 @@
 // sentido y se explica al usuario dónde está lo suyo.
 
 import { useEffect, useState, type ReactNode } from "react";
-import { Link, Navigate, NavLink, Outlet, useParams } from "react-router";
+import { Link, Navigate, NavLink, Outlet, useLocation, useParams } from "react-router";
 
-import { ErrorApi, listarUsuarios, type UsuarioAdmin } from "./api";
+import { ErrorApi, listarUsuarios, resumenTareas, type UsuarioAdmin } from "./api";
 import { inicioDe, puede, SECCIONES, seccionesDe, type Seccion } from "./permisos";
 import { NOMBRE_ROL, useSesion } from "./sesion";
+import { alCambiarTareas } from "./Tareas";
 
 /** Exige sesión: sin ella, al login. Con ella, la cabecera común y la sección pedida. */
 export function RutaProtegida() {
@@ -96,11 +97,40 @@ function Cabecera() {
           {secciones.map((s) => (
             <NavLink key={s} to={SECCIONES[s].ruta}>
               {SECCIONES[s].nombre}
+              {s === "pendientes" && <ContadorPendientes />}
             </NavLink>
           ))}
         </nav>
       )}
     </header>
+  );
+}
+
+/** El aviso dentro del CRM (T25): cuántas tareas están vencidas o son de hoy. Se pide al cambiar de
+ * página y al cambiar una tarea; si falla, simplemente no sale: no debe estorbar en cada pantalla. */
+function ContadorPendientes() {
+  const { pathname } = useLocation();
+  const [cuantas, setCuantas] = useState(0);
+  const [cambios, setCambios] = useState(0);
+
+  useEffect(() => alCambiarTareas(() => setCambios((n) => n + 1)), []);
+
+  useEffect(() => {
+    let vigente = true;
+    resumenTareas()
+      .then(({ overdue, due_today }) => vigente && setCuantas(overdue + due_today))
+      .catch(() => vigente && setCuantas(0));
+    return () => {
+      vigente = false;
+    };
+  }, [pathname, cambios]);
+
+  if (cuantas === 0) return null;
+  return (
+    <span className="contador" title="Tareas vencidas o para hoy">
+      {" "}
+      {cuantas}
+    </span>
   );
 }
 

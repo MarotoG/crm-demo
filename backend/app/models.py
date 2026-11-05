@@ -357,20 +357,28 @@ class FollowUpTask(Base):
     """Tarea de seguimiento de un contacto (T24), con responsable y fecha prevista.
 
     Solo cuelga del contacto, no de una cita (decisión T24). Vence por día de la clínica, sin hora.
-    Quién puede ser responsable lo comprueba la API, porque depende de otras tablas.
+    Quién puede ser responsable lo comprueba la API, porque depende de otras tablas. Pendiente o
+    hecha según completed_at (T25); «vencida» no se guarda: depende del día en que se mire.
     """
 
     __tablename__ = "follow_up_tasks"
     __table_args__ = (
         CheckConstraint(_name_normalized("description"), name="description_normalized"),
         CheckConstraint(f"description ~ '^[ -~]{{1,{MAX_FOLLOW_UP_LENGTH}}}$'", name="description_ascii"),
+        CheckConstraint("version >= 1", name="version_positive"),
+        CheckConstraint("completed_by_id IS NULL OR completed_at IS NOT NULL", name="completed_by_with_time"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     # Sin ON DELETE: contactos y cuentas no se borran; si alguien lo intentara, la BD lo impide.
     contact_id: Mapped[int] = mapped_column(ForeignKey("contacts.id"), index=True)
-    assigned_to_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    assigned_to_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     due_on: Mapped[date]
     description: Mapped[str] = mapped_column(String(MAX_FOLLOW_UP_LENGTH))
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Quién la marcó y cuándo (T25); reabrirla borra los dos. Solo queda el último: el historial, en T26.
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    # Bloqueo optimista (T25), como en los contactos: dos personas pueden tocar la misma tarea.
+    version: Mapped[int] = mapped_column(default=1, server_default="1")
