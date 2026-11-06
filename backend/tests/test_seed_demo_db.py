@@ -81,6 +81,10 @@ def contar(db, modelo) -> int:
     return db.scalar(select(func.count()).select_from(modelo))
 
 
+def nombre_de(db, cita: Appointment) -> str:
+    return db.get(Contact, cita.contact_id).first_name
+
+
 def test_el_comando_crea_las_cuentas_y_los_datos_sin_mostrar_contrasenas(db, monkeypatch, capsys):
     monkeypatch.setattr(seed_demo, "get_engine", db.connection)
     monkeypatch.setattr(seed_demo, "DemoPasswords", lambda: passwords("uno"))
@@ -142,14 +146,23 @@ def test_el_estado_de_cada_contacto_cuadra_con_sus_citas(db):
             assert not estados, contacto.first_name
 
 
-def test_las_citas_realizadas_son_pasadas_y_las_programadas_futuras(db):
+def test_las_citas_marcadas_son_pasadas_y_las_demas_sin_marcar(db):
     sembrar(db)
 
     for cita in db.scalars(select(Appointment)):
         if cita.status in ("completed", "no_show"):
             assert cita.starts_at < AHORA and cita.attended_at is not None
         else:
-            assert cita.starts_at > AHORA and cita.attended_at is None
+            assert cita.attended_at is None
+
+
+def test_hay_citas_pasadas_sin_marcar_y_futuras(db):
+    sembrar(db)
+
+    programadas = list(db.scalars(select(Appointment).where(Appointment.status == "scheduled")))
+
+    assert {nombre_de(db, c) for c in programadas if c.starts_at < AHORA} == {"Demo", "Liam"}
+    assert {nombre_de(db, c) for c in programadas if c.starts_at > AHORA} == {"Demo", "Liam"}
 
 
 def test_las_tareas_del_profesional_son_de_contactos_con_cita_con_el(db):
@@ -219,7 +232,11 @@ def test_busca_hueco_si_el_profesional_ya_tiene_una_cita_a_esa_hora(db):
     db.flush()
 
     liam = db.scalar(select(Contact).where(Contact.first_name == "Liam"))
-    programada = db.scalar(select(Appointment).where(Appointment.contact_id == liam.id, Appointment.status == "scheduled"))
+    programada = db.scalar(
+        select(Appointment).where(
+            Appointment.contact_id == liam.id, Appointment.status == "scheduled", Appointment.starts_at > AHORA
+        )
+    )
     assert programada.starts_at == ocupada + timedelta(hours=1)
 
 
@@ -241,5 +258,41 @@ def test_la_cuenta_de_cliente_ve_sus_citas_en_el_portal(db):
         fastapi_app.dependency_overrides.pop(get_now, None)
 
     assert [c["service_name"] for c in citas["upcoming"]] == ["Peeling suave"]
-    assert [c["service_name"] for c in citas["past"]] == ["Limpieza facial"]
-    assert citas["past"][0]["status"] == "completed"
+    # La sin marcar es la que el portal enseña como «Sin confirmar».
+    assert [(c["service_name"], c["status"]) for c in citas["past"]] == [
+        ("Consulta inicial", "scheduled"),
+        ("Limpieza facial", "completed"),
+    ]
+
+
+def test_las_citas_pasadas_se_procesan_por_la_api(db):
+    sembrar(db)
+    liam = db.scalar(select(Contact).where(Contact.first_name == "Liam"))
+    olivia = db.scalar(select(Contact).where(Contact.first_name == "Olivia"))
+    sin_marcar = db.scalar(select(Appointment).where(Appointment.contact_id == liam.id, Appointment.starts_at < AHORA))
+    faltas = list(db.scalars(select(Appointment).where(Appointment.contact_id == olivia.id).order_by(Appointment.starts_at)))
+    profesional = DEMO_EMAILS[Role.PROFESSIONAL]
+
+    fastapi_app.dependency_overrides[get_now] = lambda: AHORA
+    try:
+        client = TestClient(fastapi_app)
+        login = client.post("/api/auth/login", json={"email": profesional, "password": f"demo-{Role.PROFESSIONAL.value}-uno"})
+        assert login.status_code == 200
+        csrf = {"X-CSRF-Token": login.json()["csrf_token"]}
+
+        def marcar(cita: Appointment):
+            return client.post(
+                f"/api/appointments/{cita.id}/attendance", json={"version": cita.version, "status": "completed"}, headers=csrf
+            )
+
+        marcada, antigua, reciente = marcar(sin_marcar), marcar(faltas[0]), marcar(faltas[1])
+    finally:
+        fastapi_app.dependency_overrides.pop(get_now, None)
+
+    db.expire_all()
+    assert marcada.status_code == 200, marcada.text
+    assert db.get(Contact, liam.id).status == "client"
+    assert antigua.status_code == 409 and "ya no se puede corregir" in antigua.json()["detail"]
+    assert reciente.status_code == 200, reciente.text
+    assert db.get(Contact, olivia.id).status == "client"
+    assert contar(db, AuditEvent) == 5  # login, 2 asistencias y los 2 cambios de estado del contacto

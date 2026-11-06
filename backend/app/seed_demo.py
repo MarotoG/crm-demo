@@ -60,12 +60,16 @@ DEMO_CONTACTS = {
 }
 CLIENT_KEY = "cliente"  # el contacto de la cuenta de cliente de demo
 
-# Contacto, servicio, días desde hoy, hora de la clínica, estado.
+# Contacto, servicio, días desde hoy, hora de la clínica, estado. Una Programada pasada es una cita
+# sin marcar: la de Liam deja probar la asistencia y la de la cuenta de cliente, «Sin confirmar».
 DEMO_APPOINTMENTS = (
     (CLIENT_KEY, "facial", -14, 11, AppointmentStatus.COMPLETED),
+    (CLIENT_KEY, "consulta", -2, 12, AppointmentStatus.SCHEDULED),
     (CLIENT_KEY, "peeling", 3, 11, AppointmentStatus.SCHEDULED),
     ("sophia", "facial", -7, 16, AppointmentStatus.COMPLETED),
+    ("olivia", "peeling", -10, 15, AppointmentStatus.NO_SHOW),
     ("olivia", "consulta", -3, 10, AppointmentStatus.NO_SHOW),
+    ("liam", "facial", -1, 10, AppointmentStatus.SCHEDULED),
     ("liam", "consulta", 1, 12, AppointmentStatus.SCHEDULED),
     ("liam", "facial", 5, 15, AppointmentStatus.CANCELLED),
 )
