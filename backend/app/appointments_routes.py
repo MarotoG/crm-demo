@@ -31,6 +31,7 @@ from sqlalchemy import Select, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.audit import changed_fields, record, record_contact_status
 from app.auth import require_csrf, require_roles
 from app.config import get_settings
 from app.db import get_db
@@ -39,6 +40,8 @@ from app.models import (
     STAFF_OVERLAP_CONSTRAINT,
     Appointment,
     AppointmentStatus,
+    AuditAction,
+    AuditTarget,
     CancelReason,
     Contact,
     ContactStatus,
@@ -456,10 +459,13 @@ def create_appointment(
         raise _overlap_or_raise(error, db, staff_id, starts_at, ends_at, zone) from None
     # El estado del contacto, en la misma transacción: o se guardan los dos cambios o ninguno. Sube
     # su versión (T13): quien editaba la ficha con la anterior recibirá 409 y verá el estado nuevo.
+    status_before = contact.status
     if contact.status in PROMOTED_TO_SCHEDULED:
         contact.status = ContactStatus.SCHEDULED
         contact.version += 1
         contact.updated_by_id = user.id
+    record(db, AuditAction.APPOINTMENT_CREATED, user, (AuditTarget.APPOINTMENT, appointment.id))
+    record_contact_status(db, user, contact, status_before)
     db.commit()
     db.refresh(appointment)
     logger.info("Cita creada: id=%s contacto=%s por user_id=%s", appointment.id, contact.id, user.id)
@@ -501,6 +507,7 @@ def reschedule_appointment(
 
     staff_id = staff.id
     ends_at = starts_at + timedelta(minutes=appointment.duration_minutes)
+    fields = changed_fields(appointment, {"staff_id": staff_id, "starts_at": starts_at})
     appointment.staff_id = staff_id
     appointment.starts_at = starts_at
     appointment.ends_at = ends_at
@@ -513,6 +520,7 @@ def reschedule_appointment(
     except IntegrityError as error:
         db.rollback()
         raise _overlap_or_raise(error, db, staff_id, starts_at, ends_at, zone, moved_id=appointment_id) from None
+    record(db, AuditAction.APPOINTMENT_RESCHEDULED, user, (AuditTarget.APPOINTMENT, appointment_id), fields=fields)
     db.commit()
     db.refresh(appointment)
     logger.info("Cita reprogramada: id=%s por user_id=%s, versión %s", appointment.id, user.id, appointment.version)
@@ -543,6 +551,7 @@ def cancel_appointment(
     """
     zone = get_settings().clinic_zone
     appointment, contact = _lock_for_change(db, appointment_id, body.version, now)
+    status_before = contact.status
     appointment.status = AppointmentStatus.CANCELLED
     appointment.cancel_reason = body.reason
     appointment.cancel_note = body.note
@@ -560,6 +569,15 @@ def cancel_appointment(
             contact.status = ContactStatus.CONTACTED
             contact.version += 1
             contact.updated_by_id = user.id
+    record(
+        db,
+        AuditAction.APPOINTMENT_CANCELLED,
+        user,
+        (AuditTarget.APPOINTMENT, appointment_id),
+        from_status=AppointmentStatus.SCHEDULED,
+        to_status=AppointmentStatus.CANCELLED,
+    )
+    record_contact_status(db, user, contact, status_before)
     db.commit()
     db.refresh(appointment)
     logger.info("Cita cancelada: id=%s por user_id=%s, motivo %s", appointment.id, user.id, appointment.cancel_reason)
@@ -590,6 +608,8 @@ def mark_attendance(
     """
     zone = get_settings().clinic_zone
     appointment, contact = _lock_for_attendance(db, appointment_id, body, now, user)
+    appointment_before = appointment.status
+    contact_before = contact.status
     if appointment.attended_at is None:
         appointment.attended_at = now
     appointment.status = body.status
@@ -597,6 +617,15 @@ def mark_attendance(
     appointment.updated_by_id = user.id
     db.flush()
     _recompute_contact(db, contact, user)
+    record(
+        db,
+        AuditAction.APPOINTMENT_ATTENDANCE_MARKED,
+        user,
+        (AuditTarget.APPOINTMENT, appointment_id),
+        from_status=appointment_before,
+        to_status=body.status,
+    )
+    record_contact_status(db, user, contact, contact_before)
     db.commit()
     db.refresh(appointment)
     logger.info("Asistencia: cita id=%s %s por user_id=%s", appointment.id, appointment.status, user.id)
@@ -631,6 +660,7 @@ def edit_note(
         if db.get(Appointment, appointment_id) is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND_MESSAGE)
         raise HTTPException(status.HTTP_409_CONFLICT, VERSION_CONFLICT_MESSAGE)
+    record(db, AuditAction.APPOINTMENT_NOTE_EDITED, user, (AuditTarget.APPOINTMENT, appointment_id), fields=["note"])
     db.commit()
     appointment = db.get(Appointment, appointment_id, populate_existing=True)
     logger.info("Nota de la cita: id=%s por user_id=%s", appointment.id, user.id)

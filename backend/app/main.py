@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import OperationalError
 
 from app.appointments_routes import router as appointments_router
+from app.audit_routes import router as audit_router
 from app.auth_routes import router as auth_router
 from app.contacts_routes import router as contacts_router
 from app.db import get_database_check
@@ -32,6 +33,7 @@ app.include_router(appointments_router)
 app.include_router(invitations_router)
 app.include_router(portal_router)
 app.include_router(follow_ups_router)
+app.include_router(audit_router)
 
 
 @app.exception_handler(OperationalError)

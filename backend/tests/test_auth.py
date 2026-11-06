@@ -5,12 +5,12 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 import app.auth_routes
 from app.auth import SESSION_COOKIE, SESSION_DURATION, create_session, csrf_token_for, hash_token
 from app.main import app as fastapi_app
-from app.models import Role, User, UserSession
+from app.models import AuditEvent, Role, User, UserSession
 from app.security import hash_password
 
 PASSWORD = "contraseña-de-prueba-larga"
@@ -178,6 +178,8 @@ def test_me_si_desactivan_la_cuenta_tras_el_login_401(client, usuario, db):
 
 def test_borrar_el_usuario_borra_sus_sesiones(client, usuario, db):
     login(client)
+    # Una cuenta con eventos no se puede borrar (T26): aquí solo se comprueba qué les pasa a las sesiones.
+    db.execute(delete(AuditEvent))
     db.delete(usuario)
     db.flush()
 

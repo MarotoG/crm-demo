@@ -13,6 +13,7 @@ export type Seccion =
   | "ficha"
   | "servicios"
   | "usuarios"
+  | "auditoria"
   | "miAgenda"
   | "misServicios"
   | "pendientes"
@@ -31,6 +32,7 @@ export const SECCIONES: Record<Seccion, DatosSeccion> = {
   ficha: { ruta: "/contactos/:id", nombre: "Ficha de contacto", roles: ["admin", "reception", "professional"], enBarra: false },
   servicios: { ruta: "/servicios", nombre: "Servicios", roles: ["admin", "reception"] },
   usuarios: { ruta: "/usuarios", nombre: "Usuarios", roles: ["admin"] },
+  auditoria: { ruta: "/auditoria", nombre: "Auditoría", roles: ["admin"] },
   miAgenda: { ruta: "/mi-agenda", nombre: "Mi agenda", roles: ["professional"] },
   misServicios: { ruta: "/mis-servicios", nombre: "Mis servicios", roles: ["professional"] },
   pendientes: { ruta: "/pendientes", nombre: "Pendientes", roles: ["admin", "reception", "professional"] },

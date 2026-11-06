@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 SESSION_COOKIE = "crm_session"
 SESSION_DURATION = timedelta(hours=8)  # una jornada de clínica (decisión T08)
 # Las sesiones caducadas se guardan un mes y luego se borran (decisión T09). No es el
-# registro de auditoría de accesos a datos de clientes: ese irá en su propia tabla.
+# registro de auditoría de accesos a datos de clientes: ese está en audit_events (T26).
 SESSION_RETENTION = timedelta(days=30)
 CSRF_HEADER = "X-CSRF-Token"
 

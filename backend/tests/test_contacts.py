@@ -2,12 +2,12 @@
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError
 
 from app.auth import CSRF_HEADER
 from app.main import app as fastapi_app
-from app.models import Contact, Role, User
+from app.models import AuditEvent, Contact, Role, User
 from app.security import hash_password
 
 PASSWORD = "contraseña-de-prueba-larga"
@@ -298,6 +298,8 @@ def test_la_bd_rechaza_el_telefono_repetido_aunque_salte_la_api(db):
 
 def test_borrar_al_autor_conserva_el_contacto(usuarios, db):
     contacto_id = crear(ANA).json()["id"]
+    # Una cuenta con eventos no se puede borrar (T26): aquí solo se comprueba qué le pasa al contacto.
+    db.execute(delete(AuditEvent))
 
     db.delete(usuarios[Role.RECEPTION])
     db.flush()

@@ -17,10 +17,11 @@ from sqlalchemy import ColumnElement, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.audit import changed_fields, record
 from app.auth import require_csrf, require_roles
 from app.db import get_db
 from app.errors import field_error, user_message
-from app.models import Appointment, Contact, ContactSource, ContactStatus, Role, User
+from app.models import Appointment, AuditAction, AuditTarget, Contact, ContactSource, ContactStatus, Role, User
 from app.validators import normalize_contact_email, normalize_name, normalize_note, normalize_phone
 
 logger = logging.getLogger(__name__)
@@ -290,10 +291,12 @@ def create_contact(
     contact = Contact(**body.model_dump(), created_by_id=user.id, owner_id=user.id)
     db.add(contact)
     try:
-        db.commit()
+        db.flush()
     except IntegrityError as error:
         db.rollback()
         raise _duplicate_or_raise(error) from None
+    record(db, AuditAction.CONTACT_CREATED, user, (AuditTarget.CONTACT, contact.id))
+    db.commit()
     db.refresh(contact)
     logger.info("Contacto creado: id=%s por user_id=%s", contact.id, user.id)
     return _out(contact, user.email)
@@ -306,11 +309,16 @@ def get_contact(
     db: Session = Depends(get_db),
 ) -> ContactDetail:
     """La ficha. El profesional (T20) solo la de un contacto con alguna cita con él, pasada o
-    futura, también cancelada; si no, 404 como si no existiera: no se revela que existe."""
+    futura, también cancelada; si no, 404 como si no existiera: no se revela que existe.
+
+    Abrirla queda registrado (decisión T26): quién vio los datos de quién. Las listas, no."""
     contact = db.get(Contact, contact_id)
     if contact is None or (user.role == Role.PROFESSIONAL and not has_appointment_with(db, contact_id, user.id)):
         raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND_MESSAGE)
-    return _detail(db, contact)
+    detail = _detail(db, contact)
+    record(db, AuditAction.CONTACT_VIEWED, user, (AuditTarget.CONTACT, contact_id))
+    db.commit()
+    return detail
 
 
 def has_appointment_with(db: Session, contact_id: int, staff_id: int) -> bool:
@@ -345,6 +353,8 @@ def update_contact(
     if body.owner_id is not None and body.owner_id != current.owner_id and not _valid_owner(db, body.owner_id):
         raise field_error("owner_id", OWNER_NOT_VALID_MESSAGE)
     _check_email_free(db, body.email, contact_id)
+    new_values = body.model_dump(exclude={"version"})
+    fields = changed_fields(current, new_values)
     # Bloqueo optimista en una sola sentencia: solo se actualiza si la versión sigue siendo la
     # que leyó quien edita. Con dos ediciones a la vez, PostgreSQL bloquea la fila: la segunda
     # espera, vuelve a mirar la versión (ya subida) y no actualiza nada.
@@ -352,7 +362,7 @@ def update_contact(
         update(Contact)
         .where(Contact.id == contact_id, Contact.version == body.version)
         .values(
-            **body.model_dump(exclude={"version"}),
+            **new_values,
             version=Contact.version + 1,
             updated_by_id=user.id,
             updated_at=func.now(),
@@ -373,6 +383,7 @@ def update_contact(
         if db.get(Contact, contact_id) is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND_MESSAGE)
         raise HTTPException(status.HTTP_409_CONFLICT, VERSION_CONFLICT_MESSAGE)
+    record(db, AuditAction.CONTACT_UPDATED, user, (AuditTarget.CONTACT, contact_id), fields=fields)
     db.commit()
     contact = db.get(Contact, contact_id, populate_existing=True)
     logger.info("Contacto editado: id=%s por user_id=%s, versión %s", contact.id, user.id, contact.version)
@@ -404,6 +415,8 @@ def change_status(
         if target == ContactStatus.NEW:
             raise field_error("status", "Un contacto no vuelve a «Nuevo»")
         raise field_error("status", f"«{STATUS_NAMES[target]}» no se pone a mano: lo pondrán las citas")
+    # Para el registro. Si el UPDATE pasa, sigue siendo este: todo cambio de estado sube la versión.
+    origin_status = db.scalar(select(Contact.status).where(Contact.id == contact_id))
     # Como en la edición, una sola sentencia: versión y estado de origen se comprueban en el
     # mismo UPDATE, sin ventana entre leer y guardar.
     statement = (
@@ -425,6 +438,14 @@ def change_status(
             raise HTTPException(status.HTTP_409_CONFLICT, VERSION_CONFLICT_MESSAGE)
         origin = STATUS_NAMES[ContactStatus(contact.status)]
         raise field_error("status", f"No se puede pasar de «{origin}» a «{STATUS_NAMES[target]}»")
+    record(
+        db,
+        AuditAction.CONTACT_STATUS_CHANGED,
+        user,
+        (AuditTarget.CONTACT, contact_id),
+        from_status=origin_status,
+        to_status=target,
+    )
     db.commit()
     contact = db.get(Contact, contact_id, populate_existing=True)
     logger.info("Estado del contacto: id=%s a %s por user_id=%s, versión %s", contact.id, target.value, user.id, contact.version)

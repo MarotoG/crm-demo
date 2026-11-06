@@ -18,12 +18,13 @@ from sqlalchemy import ColumnElement, exists, func, or_, select, update
 from sqlalchemy.orm import Session, aliased
 
 from app.appointments_routes import MAX_DAYS_AHEAD, get_now
+from app.audit import changed_fields, record
 from app.auth import require_csrf, require_roles
 from app.config import get_settings
 from app.contacts_routes import has_appointment_with
 from app.db import get_db
 from app.errors import field_error, user_message
-from app.models import Appointment, Contact, FollowUpTask, Role, User
+from app.models import Appointment, AuditAction, AuditTarget, Contact, FollowUpTask, Role, User
 from app.validators import DUE_DATE_FORMAT_MESSAGE, normalize_follow_up_description, parse_due_date
 
 logger = logging.getLogger(__name__)
@@ -282,6 +283,7 @@ def complete_follow_up(
     ).scalar_one_or_none()
     if done is None:
         raise _conflict_or_missing(db, task_id, user, ALREADY_DONE_MESSAGE, None)
+    record(db, AuditAction.FOLLOW_UP_COMPLETED, user, (AuditTarget.FOLLOW_UP, task_id))
     db.commit()
     logger.info("Tarea de seguimiento hecha: id=%s por user_id=%s", task_id, user.id)
     return _read_one(db, task_id)
@@ -316,6 +318,7 @@ def reopen_follow_up(
     ).scalar_one_or_none()
     if reopened is None:
         raise _conflict_or_missing(db, task_id, user, None, NOT_DONE_MESSAGE)
+    record(db, AuditAction.FOLLOW_UP_REOPENED, user, (AuditTarget.FOLLOW_UP, task_id))
     db.commit()
     logger.info("Tarea de seguimiento reabierta: id=%s por user_id=%s", task_id, user.id)
     return _read_one(db, task_id)
@@ -347,14 +350,17 @@ def update_follow_up(
         _check_due_on(body.due_on, _today(now))
     if body.assigned_to_id != task.assigned_to_id:
         _check_assignee(db, task.contact_id, body.assigned_to_id)
+    new_values = body.model_dump(exclude={"version"})
+    fields = changed_fields(task, new_values)
     updated = db.execute(
         update(FollowUpTask)
         .where(FollowUpTask.id == task_id, FollowUpTask.version == body.version, FollowUpTask.completed_at.is_(None))
-        .values(**body.model_dump(exclude={"version"}), version=FollowUpTask.version + 1)
+        .values(**new_values, version=FollowUpTask.version + 1)
         .returning(FollowUpTask.id)
     ).scalar_one_or_none()
     if updated is None:
         raise _conflict_or_missing(db, task_id, user, EDIT_DONE_MESSAGE, None)
+    record(db, AuditAction.FOLLOW_UP_UPDATED, user, (AuditTarget.FOLLOW_UP, task_id), fields=fields)
     db.commit()
     logger.info("Tarea de seguimiento editada: id=%s por user_id=%s", task_id, user.id)
     return _read_one(db, task_id)
@@ -421,6 +427,8 @@ def create_follow_up(
     _check_assignee(db, contact_id, body.assigned_to_id)
     task = FollowUpTask(contact_id=contact_id, created_by_id=user.id, **body.model_dump())
     db.add(task)
+    db.flush()
+    record(db, AuditAction.FOLLOW_UP_CREATED, user, (AuditTarget.FOLLOW_UP, task.id))
     db.commit()
     logger.info("Tarea de seguimiento creada: id=%s contacto=%s por user_id=%s", task.id, contact_id, user.id)
     return _read_one(db, task.id)

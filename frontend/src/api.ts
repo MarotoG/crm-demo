@@ -466,6 +466,53 @@ export function crearTarea(contacto: number, datos: NuevaTarea, csrf: string): P
   return peticion(`/api/contacts/${contacto}/follow-ups`, { method: "POST", cuerpo: datos, csrf });
 }
 
+// --- Auditoría (T26) -------------------------------------------------------------
+
+export type AccionAuditoria =
+  | "login_succeeded"
+  | "login_failed"
+  | "logout"
+  | "contact_viewed"
+  | "contact_created"
+  | "contact_updated"
+  | "contact_status_changed"
+  | "service_created"
+  | "service_updated"
+  | "appointment_created"
+  | "appointment_rescheduled"
+  | "appointment_cancelled"
+  | "appointment_attendance_marked"
+  | "appointment_note_edited"
+  | "invitation_created"
+  | "invitation_accepted"
+  | "follow_up_created"
+  | "follow_up_updated"
+  | "follow_up_completed"
+  | "follow_up_reopened";
+
+export type EventoAuditoria = {
+  id: number;
+  occurred_at: string;
+  actor_email: string | null;
+  action: AccionAuditoria;
+  target_type: "contact" | "service" | "appointment" | "follow_up" | "user" | null;
+  target_id: number | null;
+  target_email: string | null;
+  changed_fields: string[];
+  from_status: string | null;
+  to_status: string | null;
+};
+
+export type ListaEventos = { total: number; page_size: number; items: EventoAuditoria[] };
+
+/** Del más reciente al más antiguo, por páginas. Solo administración: los demás, 403. */
+export function listarEventos(filtros: { persona?: number; accion?: string; pagina: number }): Promise<ListaEventos> {
+  const parametros = new URLSearchParams({ page: String(filtros.pagina) });
+  if (filtros.persona !== undefined) parametros.set("actor_id", String(filtros.persona));
+  if (filtros.accion) parametros.set("action", filtros.accion);
+  return peticion(`/api/audit-events?${parametros}`);
+}
+
 // --- Portal del cliente (T22) ----------------------------------------------------
 
 /** Lo que el cliente sabe de una cita: sin notas, motivo ni quién la realiza. */

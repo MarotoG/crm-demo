@@ -550,8 +550,13 @@ button.enlace {
 /* Aquí la primera línea lleva la fecha completa, no solo la hora como en la agenda. */
 .seccion-ficha .cita,
 .portal .cita,
-.pendientes .cita {
+.pendientes .cita,
+.auditoria .cita {
   display: flex;
+}
+
+.auditoria .filtros {
+  margin-top: 0.75rem;
 }
 
 .portal h3 {

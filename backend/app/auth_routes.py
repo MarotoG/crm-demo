@@ -5,8 +5,10 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.audit import record
 from app.auth import (
     CSRF_HEADER,
     SESSION_COOKIE,
@@ -22,7 +24,7 @@ from app.auth import (
 )
 from app.config import get_settings
 from app.db import get_db
-from app.models import User
+from app.models import AuditAction, AuditTarget, User
 from app.security import normalize_email
 
 logger = logging.getLogger(__name__)
@@ -58,6 +60,14 @@ def _cookie_secure() -> bool:
     return get_settings().env != "development"
 
 
+def _record_failed_login(db: Session, email: str) -> None:
+    """La cuenta intentada, si existe, como objetivo y no como actor: quien lo intenta no ha demostrado
+    ser esa persona. Lo tecleado no se guarda, porque alguien podría escribir su contraseña ahí."""
+    account_id = db.scalar(select(User.id).where(User.email == email))
+    record(db, AuditAction.LOGIN_FAILED, target=(AuditTarget.USER, account_id) if account_id else None)
+    db.commit()
+
+
 @router.post("/login")
 def login(body: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)) -> SessionOut:
     key = (request.client.host if request.client else "desconocida", normalize_email(body.email))
@@ -67,6 +77,7 @@ def login(body: LoginRequest, request: Request, response: Response, db: Session 
     user = authenticate(db, body.email, body.password)
     if user is None:
         login_limiter.register_failure(key)
+        _record_failed_login(db, key[1])
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, INVALID_CREDENTIALS)
 
     login_limiter.reset(key)
@@ -74,6 +85,7 @@ def login(body: LoginRequest, request: Request, response: Response, db: Session 
     csrf_token = csrf_token_for(token)  # antes del commit: si falta CRM_SECRET_KEY no se crea la sesión
     # Limpieza automática (T09): cada login borra las sesiones caducadas hace más de 30 días.
     purge_expired_sessions(db)
+    record(db, AuditAction.LOGIN_SUCCEEDED, user)
     db.commit()
     response.set_cookie(
         SESSION_COOKIE,
@@ -114,6 +126,7 @@ def logout(
                 logger.warning("CSRF rechazado: user_id=%s POST /api/auth/logout", user.id)
                 raise HTTPException(status.HTTP_403_FORBIDDEN, "Token CSRF ausente o no válido")
             session.revoked_at = datetime.now(UTC)
+            record(db, AuditAction.LOGOUT, user)
             db.commit()
             logger.info("Logout: user_id=%s", user.id)
     # Mismos atributos que al crearla: si no coinciden, el navegador no la borra.

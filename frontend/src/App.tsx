@@ -8,6 +8,7 @@ import { Route, Routes } from "react-router";
 
 import Agenda from "./Agenda";
 import { ConPermiso, Inicio, NoEncontrada, RedirigirFicha, RutaProtegida, Usuarios } from "./Areas";
+import Auditoria from "./Auditoria";
 import Contactos from "./Contactos";
 import FichaContacto from "./FichaContacto";
 import Invitacion from "./Invitacion";
@@ -30,6 +31,7 @@ export default function App() {
           <Route path="/contactos/:id" element={<ConPermiso seccion="ficha"><FichaContacto /></ConPermiso>} />
           <Route path="/servicios" element={<ConPermiso seccion="servicios"><Servicios /></ConPermiso>} />
           <Route path="/usuarios" element={<ConPermiso seccion="usuarios"><Usuarios /></ConPermiso>} />
+          <Route path="/auditoria" element={<ConPermiso seccion="auditoria"><Auditoria /></ConPermiso>} />
           <Route path="/mi-agenda" element={<ConPermiso seccion="miAgenda"><Agenda propia /></ConPermiso>} />
           <Route path="/mis-servicios" element={<ConPermiso seccion="misServicios"><MisServicios /></ConPermiso>} />
           <Route path="/pendientes" element={<ConPermiso seccion="pendientes"><Pendientes /></ConPermiso>} />

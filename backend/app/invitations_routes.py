@@ -21,9 +21,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.appointments_routes import get_now
+from app.audit import record
 from app.auth import hash_token, require_csrf, require_roles
 from app.db import get_db
-from app.models import Contact, ContactStatus, PortalInvitation, Role, User
+from app.models import AuditAction, AuditTarget, Contact, ContactStatus, PortalInvitation, Role, User
 from app.security import MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH, hash_password
 
 logger = logging.getLogger(__name__)
@@ -152,6 +153,7 @@ def create_invitation(
     db.add(
         PortalInvitation(token_hash=hash_token(token), contact_id=contact_id, created_by_id=user.id, expires_at=expires_at)
     )
+    record(db, AuditAction.INVITATION_CREATED, user, (AuditTarget.CONTACT, contact_id))
     db.commit()
     logger.info("Invitación al portal: contacto=%s por user_id=%s", contact_id, user.id)
     return InvitationOut(token=token, expires_at=expires_at)
@@ -221,11 +223,13 @@ def accept_invitation(body: InvitationAccept, db: Session = Depends(get_db), now
     )
     db.add(user)
     try:
-        db.commit()
+        db.flush()
     except IntegrityError as error:
         db.rollback()
         constraint = getattr(getattr(error.orig, "diag", None), "constraint_name", None)
         if constraint == "uq_users_email":
             raise HTTPException(status.HTTP_409_CONFLICT, EMAIL_TAKEN_MESSAGE) from None
         raise
+    record(db, AuditAction.INVITATION_ACCEPTED, user, (AuditTarget.CONTACT, contact.id))
+    db.commit()
     logger.info("Cuenta de cliente creada: user_id=%s contacto=%s", user.id, invitation.contact_id)

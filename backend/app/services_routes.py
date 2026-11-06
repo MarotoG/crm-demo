@@ -16,10 +16,11 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.audit import changed_fields, record
 from app.auth import require_csrf, require_roles
 from app.db import get_db
 from app.errors import field_error, user_message
-from app.models import Role, Service, ServiceStaff, User
+from app.models import AuditAction, AuditTarget, Role, Service, ServiceStaff, User
 from app.validators import check_duration, normalize_service_name
 
 logger = logging.getLogger(__name__)
@@ -175,6 +176,7 @@ def create_service(
         db.rollback()
         raise _name_taken_or_raise(error) from None
     db.add_all(ServiceStaff(service_id=service.id, user_id=user_id) for user_id in body.staff_ids)
+    record(db, AuditAction.SERVICE_CREATED, user, (AuditTarget.SERVICE, service.id))
     db.commit()
     logger.info("Servicio creado: id=%s por user_id=%s", service.id, user.id)
     return _out(db, [service])[0]
@@ -195,7 +197,8 @@ def update_service(
     db: Session = Depends(get_db),
 ) -> ServiceOut:
     """Editar, desactivar o reactivar: siempre el servicio entero con la versión leída."""
-    if db.get(Service, service_id) is None:
+    existing = db.get(Service, service_id)
+    if existing is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND_MESSAGE)
     if body.active and not body.staff_ids:
         raise field_error("staff_ids", NEEDS_STAFF_MESSAGE)
@@ -205,6 +208,9 @@ def update_service(
     added = set(body.staff_ids) - current
     if added and not _all_eligible(db, added):
         raise field_error("staff_ids", STAFF_NOT_VALID_MESSAGE)
+    fields = changed_fields(existing, body.model_dump(include={"name", "duration_minutes", "active"}))
+    if set(body.staff_ids) != current:
+        fields.append("staff_ids")
     # Bloqueo optimista en una sola sentencia, como en los contactos (T13). Si actualiza, la fila
     # queda bloqueada hasta el commit: otra edición del mismo servicio espera y recibe 409. Como
     # cualquier cambio sube la versión, las personas leídas arriba son las de esta versión.
@@ -229,6 +235,7 @@ def update_service(
         delete(ServiceStaff).where(ServiceStaff.service_id == service_id, ServiceStaff.user_id.not_in(body.staff_ids))
     )
     db.add_all(ServiceStaff(service_id=service_id, user_id=user_id) for user_id in added)
+    record(db, AuditAction.SERVICE_UPDATED, user, (AuditTarget.SERVICE, service_id), fields=fields)
     db.commit()
     service = db.get(Service, service_id, populate_existing=True)
     logger.info("Servicio editado: id=%s por user_id=%s, versión %s", service.id, user.id, service.version)

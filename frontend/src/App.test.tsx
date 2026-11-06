@@ -153,7 +153,7 @@ describe("secciones por rol (T18)", () => {
 
   it.each([
     [RECEPCION, ["Agenda", "Contactos", "Servicios", "Pendientes"]],
-    [ADMIN, ["Agenda", "Contactos", "Servicios", "Usuarios", "Pendientes"]],
+    [ADMIN, ["Agenda", "Contactos", "Servicios", "Usuarios", "Auditoría", "Pendientes"]],
   ])("la barra de secciones depende del rol (%#)", async (cuenta, secciones) => {
     conSesion(cuenta);
     abrir("/agenda");

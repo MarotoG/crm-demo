@@ -170,7 +170,7 @@ class Contact(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
-    # Quién hizo el último cambio (T13); el historial completo llegará con la auditoría.
+    # Quién hizo el último cambio (T13); los anteriores, en audit_events (T26).
     updated_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     # Bloqueo optimista (T13): cada edición la sube en 1; quien edita envía la que leyó y,
     # si ya no coincide, otra persona guardó antes (409).
@@ -377,8 +377,75 @@ class FollowUpTask(Base):
     description: Mapped[str] = mapped_column(String(MAX_FOLLOW_UP_LENGTH))
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    # Quién la marcó y cuándo (T25); reabrirla borra los dos. Solo queda el último: el historial, en T26.
+    # Quién la marcó y cuándo (T25); reabrirla borra los dos. Los anteriores, en audit_events (T26).
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     # Bloqueo optimista (T25), como en los contactos: dos personas pueden tocar la misma tarea.
     version: Mapped[int] = mapped_column(default=1, server_default="1")
+
+
+class AuditAction(StrEnum):
+    """Qué se registra (decisión T26): acceso, abrir una ficha y cambios de datos. Ni listas ni rechazos."""
+
+    LOGIN_SUCCEEDED = "login_succeeded"
+    LOGIN_FAILED = "login_failed"
+    LOGOUT = "logout"
+    CONTACT_VIEWED = "contact_viewed"
+    CONTACT_CREATED = "contact_created"
+    CONTACT_UPDATED = "contact_updated"
+    CONTACT_STATUS_CHANGED = "contact_status_changed"
+    SERVICE_CREATED = "service_created"
+    SERVICE_UPDATED = "service_updated"
+    APPOINTMENT_CREATED = "appointment_created"
+    APPOINTMENT_RESCHEDULED = "appointment_rescheduled"
+    APPOINTMENT_CANCELLED = "appointment_cancelled"
+    APPOINTMENT_ATTENDANCE_MARKED = "appointment_attendance_marked"
+    APPOINTMENT_NOTE_EDITED = "appointment_note_edited"
+    INVITATION_CREATED = "invitation_created"
+    INVITATION_ACCEPTED = "invitation_accepted"
+    FOLLOW_UP_CREATED = "follow_up_created"
+    FOLLOW_UP_UPDATED = "follow_up_updated"
+    FOLLOW_UP_COMPLETED = "follow_up_completed"
+    FOLLOW_UP_REOPENED = "follow_up_reopened"
+
+
+class AuditTarget(StrEnum):
+    CONTACT = "contact"
+    SERVICE = "service"
+    APPOINTMENT = "appointment"
+    FOLLOW_UP = "follow_up"
+    USER = "user"
+
+
+class AuditEvent(Base):
+    """Un evento de auditoría (T26): quién hizo qué, sobre qué registro y cuándo.
+
+    Columnas cerradas en vez de un JSON libre: guarda los nombres de los campos que cambiaron y
+    estados de listas cerradas, nunca sus valores (decisión T26), porque las notas son texto libre
+    donde alguien podría escribir un dato clínico. Es una tabla normal: la API no ofrece cambiarla ni
+    borrarla, pero quien tenga acceso directo a la BD sí podría. No es un registro inmutable.
+    """
+
+    __tablename__ = "audit_events"
+    __table_args__ = (
+        CheckConstraint(_in_list("action", AuditAction), name="action_valid"),
+        CheckConstraint(_in_list("target_type", AuditTarget), name="target_type_valid"),
+        CheckConstraint("(target_type IS NULL) = (target_id IS NULL)", name="target_complete"),
+        # Solo identificadores: «note, phone» cabe; una frase con mayúsculas o signos, no.
+        CheckConstraint("changed_fields ~ '^[a-z_]+(, [a-z_]+)*$'", name="changed_fields_names"),
+        CheckConstraint("from_status ~ '^[a-z_]+$'", name="from_status_name"),
+        CheckConstraint("to_status ~ '^[a-z_]+$'", name="to_status_name"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Sin ON DELETE: borrar una cuenta con eventos falla y su rastro se conserva. Sin actor: un login
+    # fallido, donde nadie ha demostrado quién es (la cuenta intentada va como objetivo).
+    actor_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+    action: Mapped[str] = mapped_column(String(40))
+    # Sin clave ajena: el objetivo puede ser de varias tablas.
+    target_type: Mapped[str | None] = mapped_column(String(20))
+    target_id: Mapped[int | None]
+    changed_fields: Mapped[str | None] = mapped_column(String(200))
+    from_status: Mapped[str | None] = mapped_column(String(20))
+    to_status: Mapped[str | None] = mapped_column(String(20))
