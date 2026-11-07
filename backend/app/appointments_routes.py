@@ -420,8 +420,9 @@ def create_appointment(
     # Se leen con bloqueo, siempre en este orden (contacto, servicio, persona), hasta el commit:
     # - el contacto, en exclusiva: si a la vez alguien lo marca Perdido, uno de los dos espera y
     #   ve el resultado del otro (no puede quedar una cita nueva con un contacto Perdido);
-    # - el servicio y la persona, compartidos: varias citas a la vez no se esperan entre sí, pero
-    #   desactivar el servicio o cambiar sus personas (T15) sí espera, y al revés.
+    # - el servicio, compartido: varias citas a la vez no se esperan entre sí, pero desactivarlo o
+    #   cambiar sus personas (T15) sí espera, y al revés;
+    # - la persona, en exclusiva: sus citas van de una en una (ver _lock_staff).
     contact = _lock_contact(db, body.contact_id)
     if contact is None:
         raise field_error("contact_id", CONTACT_NOT_FOUND_MESSAGE)
@@ -451,8 +452,8 @@ def create_appointment(
     db.add(appointment)
     try:
         # Solapamientos (T17): decide la restricción de exclusión de PostgreSQL, no una consulta
-        # previa. Con dos peticiones a la vez para la misma persona, la segunda espera a que la
-        # primera termine y, si se pisan, falla aquí.
+        # previa. Con dos peticiones a la vez para la misma persona, la segunda espera en _lock_staff
+        # a que la primera termine y, si se pisan, falla aquí.
         db.flush()
     except IntegrityError as error:
         db.rollback()
@@ -756,7 +757,13 @@ def _lock_active_service(db: Session, service_id: int) -> Service | None:
 
 
 def _lock_staff(db: Session, service_id: int, staff_id: int) -> User | None:
-    """Una de las personas del servicio, con su cuenta interna activa."""
+    """Una de las personas del servicio, con su cuenta interna activa, bloqueada hasta el commit.
+
+    Las citas de una misma persona se hacen de una en una. La restricción de exclusión escribe la
+    fila y luego busca choques: dos a la vez se verían y esperarían la una a la otra, y PostgreSQL
+    cortaría una como interbloqueo (503 en vez de 409; T28). FOR NO KEY UPDATE no frena las claves
+    ajenas a esta cuenta (key_share), y personas distintas no se esperan.
+    """
     return db.scalars(
         select(User)
         .join(ServiceStaff, ServiceStaff.user_id == User.id)
@@ -766,7 +773,7 @@ def _lock_staff(db: Session, service_id: int, staff_id: int) -> User | None:
             User.active.is_(True),
             User.role.in_(STAFF_ROLES),
         )
-        .with_for_update(read=True, of=User)
+        .with_for_update(key_share=True, of=User)
         .execution_options(populate_existing=True)
     ).one_or_none()
 

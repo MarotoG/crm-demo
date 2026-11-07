@@ -1,0 +1,175 @@
+# Publicación de crm-demo (T28). Se usa siempre indicando el archivo, para que Docker no cargue
+# compose.override.yaml, que publica la BD y es solo de desarrollo:
+#   docker compose -f compose.prod.yaml build
+#   docker compose -f compose.prod.yaml up -d
+#   docker compose -f compose.prod.yaml run --rm seed      (datos de demo, a mano)
+#
+# Camino de una visita: Cloudflare -> cloudflared -> web (nginx) -> api -> db.
+# Valores: .env junto a este archivo (copiar de .env.prod.example).
+name: crm-demo
+
+x-logs: &logs
+  # Docker no rota los logs por defecto: como máximo 30 MB por contenedor.
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+x-hardening: &hardening
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+
+# Conexión a la BD como dueño, solo para cambiar su estructura.
+x-db-owner: &db-owner
+  CRM_ENV: production
+  CRM_DB_HOST: db
+  CRM_DB_NAME: ${CRM_DB_NAME:?Falta CRM_DB_NAME en .env}
+  CRM_DB_USER: ${CRM_DB_USER:?Falta CRM_DB_USER en .env}
+  CRM_DB_PASSWORD: ${CRM_DB_PASSWORD:?Falta CRM_DB_PASSWORD en .env}
+
+# Conexión a la BD con el usuario limitado que crea app.db_roles.
+x-db-app: &db-app
+  CRM_ENV: production
+  CRM_DB_HOST: db
+  CRM_DB_NAME: ${CRM_DB_NAME:?Falta CRM_DB_NAME en .env}
+  CRM_DB_USER: ${CRM_APP_DB_USER:-crm_app}
+  CRM_DB_PASSWORD: ${CRM_APP_DB_PASSWORD:?Falta CRM_APP_DB_PASSWORD en .env}
+  CRM_SECRET_KEY: ${CRM_SECRET_KEY:?Falta CRM_SECRET_KEY en .env}
+  CRM_CLINIC_TIMEZONE: ${CRM_CLINIC_TIMEZONE:-America/New_York}
+
+services:
+  db:
+    # PostgreSQL 18.4, la misma imagen probada en desarrollo (T05). Sin ports: no se publica.
+    image: postgres:18.4-trixie@sha256:a02db8cac496f15b094798a38254f14d6e00741f709360e5e00bb6668ea31636
+    environment:
+      POSTGRES_DB: ${CRM_DB_NAME:?Falta CRM_DB_NAME en .env}
+      POSTGRES_USER: ${CRM_DB_USER:?Falta CRM_DB_USER en .env}
+      POSTGRES_PASSWORD: ${CRM_DB_PASSWORD:?Falta CRM_DB_PASSWORD en .env}
+    volumes:
+      # Carpeta del servidor, en un sistema de archivos de Linux. En PostgreSQL 18 se monta aquí.
+      - ${CRM_DB_DATA_DIR:?Falta CRM_DB_DATA_DIR en .env}:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    networks:
+      - backend
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1g
+    restart: unless-stopped
+    <<: *logs
+
+  # Se ejecuta en cada arranque y termina: migra y deja listos los permisos del usuario limitado.
+  migrate:
+    build: ./backend
+    command: ["sh", "-c", "alembic upgrade head && python -m app.db_roles"]
+    environment:
+      <<: *db-owner
+      CRM_APP_DB_USER: ${CRM_APP_DB_USER:-crm_app}
+      CRM_APP_DB_PASSWORD: ${CRM_APP_DB_PASSWORD:?Falta CRM_APP_DB_PASSWORD en .env}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - backend
+    restart: "no"
+    <<: [*logs, *hardening]
+
+  api:
+    build: ./backend
+    environment:
+      <<: *db-app
+      # Solo se cree X-Forwarded-For si la conexión viene de nginx (su IP fija, abajo).
+      FORWARDED_ALLOW_IPS: 10.250.28.2
+      WEB_CONCURRENCY: ${CRM_API_WORKERS:-1}
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 10s
+    networks:
+      - backend
+    mem_limit: 2g
+    restart: unless-stopped
+    <<: [*logs, *hardening]
+
+  web:
+    build: ./frontend
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 5s
+    networks:
+      edge:
+      backend:
+        ipv4_address: 10.250.28.2
+    mem_limit: 128m
+    restart: unless-stopped
+    <<: [*logs, *hardening]
+
+  cloudflared:
+    # Conector propio, fijado por digest (publicado el 21/10/2026). En el panel, la ruta apunta a
+    # http://web:8080. Solo comparte red con web: no alcanza ni la API ni la BD.
+    image: cloudflare/cloudflared:2026.10.3@sha256:faa8e0a1475f137c910be6025f43c8e4092fdd35461b31e19fd1390657a1ff39
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      TUNNEL_TOKEN: ${CRM_TUNNEL_TOKEN:?Falta CRM_TUNNEL_TOKEN en .env}
+    depends_on:
+      web:
+        condition: service_healthy
+    networks:
+      - edge
+    mem_limit: 256m
+    restart: unless-stopped
+    <<: [*logs, *hardening]
+
+  # Datos de demo, a mano y con el usuario limitado. No arranca con "up".
+  seed:
+    build: ./backend
+    profiles: ["manual"]
+    command: ["python", "-m", "app.seed_demo"]
+    environment:
+      <<: *db-app
+      CRM_DEMO_PASSWORD_ADMIN: ${CRM_DEMO_PASSWORD_ADMIN:-}
+      CRM_DEMO_PASSWORD_RECEPTION: ${CRM_DEMO_PASSWORD_RECEPTION:-}
+      CRM_DEMO_PASSWORD_PROFESSIONAL: ${CRM_DEMO_PASSWORD_PROFESSIONAL:-}
+      CRM_DEMO_PASSWORD_CLIENT: ${CRM_DEMO_PASSWORD_CLIENT:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - backend
+    restart: "no"
+    <<: [*logs, *hardening]
+
+networks:
+  # La única con salida a Internet: la necesita el conector.
+  edge:
+  # Sin salida a Internet: API y BD solo se hablan entre ellas y con nginx.
+  backend:
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.250.28.0/28
+          # Docker reparte de aquí las IP automáticas, para que nunca asigne la fija de nginx (.2).
+          ip_range: 10.250.28.8/29

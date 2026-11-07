@@ -1,0 +1,20 @@
+# Ensayo de la publicación en un PC, sin Cloudflare (T28). Se añade a compose.prod.yaml:
+#   docker compose -f compose.prod.yaml -f compose.preprod.yaml --env-file <archivo> up -d --build
+# Proyecto y volumen propios: no toca la BD de desarrollo (proyecto crm-demo).
+name: crm-demo-preprod
+
+services:
+  db:
+    volumes: !override
+      - preprod_db:/var/lib/postgresql
+
+  web:
+    ports:
+      - "127.0.0.1:18080:8080"
+
+  # Sin túnel: el perfil hace que no arranque.
+  cloudflared:
+    profiles: ["sin-conector"]
+
+volumes:
+  preprod_db:

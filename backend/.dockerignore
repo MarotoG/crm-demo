@@ -1,0 +1,8 @@
+# La imagen solo lleva lo que copia el Dockerfile; el resto ni se envía a Docker.
+*
+!requirements.txt
+!alembic.ini
+!logging.json
+!migrations/
+!app/
+**/__pycache__/

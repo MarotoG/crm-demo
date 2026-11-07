@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, func, select, text, update
+from sqlalchemy import delete, event, func, select, text, update
 from sqlalchemy.exc import DataError, IntegrityError
 
 from app import appointments_routes
@@ -1804,3 +1804,39 @@ def test_la_bd_rechaza_una_nota_de_cita_que_salte_la_api(db, usuarios, escena):
     for nota in ("", " x", "Ni\u00f1o", "x" * 201):
         with pytest.raises((IntegrityError, DataError)), db.begin_nested():
             db.execute(update(Appointment).where(Appointment.id == cita["id"]).values(note=nota))
+
+
+def test_crear_y_mover_bloquean_a_la_persona_en_exclusiva(db, escena):
+    """Sin este bloqueo, dos citas a la vez de la misma persona pueden interbloquearse (503, T28).
+
+    El choque real necesita peticiones simultáneas y se comprobó contra la API; aquí queda fijado
+    que las dos rutas lo piden, y después del contacto y el servicio: siempre el mismo orden.
+    """
+    sentencias = []
+    conexion = db.connection()
+
+    def anotar(_conn, _cursor, statement, *_args):
+        sentencias.append(statement)
+
+    event.listen(conexion, "before_cursor_execute", anotar)
+    try:
+        creada = crear(datos(escena))
+        assert creada.status_code == 201
+        del_alta = list(sentencias)
+        sentencias.clear()
+        client, csrf = sesion_de(Role.RECEPTION)
+        sentencias.clear()
+        movida = client.put(
+            f"/api/appointments/{creada.json()['id']}",
+            json={"staff_id": escena[2].id, "starts_at": "2027-01-11T11:00", "version": creada.json()["version"]},
+            headers=csrf,
+        )
+        assert movida.status_code == 200
+    finally:
+        event.remove(conexion, "before_cursor_execute", anotar)
+
+    for lista in (del_alta, sentencias):
+        bloqueos = [s for s in lista if " FOR " in s and "FROM users" in s]
+        assert len(bloqueos) == 1 and bloqueos[0].rstrip().endswith("FOR NO KEY UPDATE OF users")
+        orden = [i for i, s in enumerate(lista) if " FOR " in s and ("FROM contacts" in s or "FROM services" in s or "FROM users" in s)]
+        assert lista[orden[-1]] == bloqueos[0]
