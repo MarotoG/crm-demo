@@ -14,7 +14,7 @@ Fuente: `M12_A01_D01__documentacion_tfm.md`, contrastado con el PDF original de 
 | TFM-R06 | Slides del proyecto | p. 2, 4 | URL pública o archivo junto al código, con referencia en README | Pendiente |
 | TFM-R07 | Vídeo con explicación propia y captura de pantalla | p. 2, 5 | Grabación revisada; pantalla visible y explicación del alumno | Pendiente |
 | TFM-R08 | URL pública del vídeo en documentación | p. 2, 5.a | Enlace en README probado sin depender de la sesión del propietario | Pendiente |
-| TFM-R09 | Documentación, información del despliegue y slides/referencia en el directorio del código | p. 2, tras requisito 5 | Revisión del repositorio entregado; estado del despliegue descrito fielmente | En curso: despliegue descrito en `04`, sección T28 (10/11/2026), y en `compose.prod.yaml` y `.env.prod.example`; falta el apartado del README (T30) y las slides |
+| TFM-R09 | Documentación, información del despliegue y slides/referencia en el directorio del código | p. 2, tras requisito 5 | Revisión del repositorio entregado; estado del despliegue descrito fielmente | En curso: despliegue descrito en `04`, secciones T28 y T29 (10/11/2026), y en `compose.prod.yaml`, `.env.prod.example` y `scripts/crm_backup.sh`; falta el apartado del README (T30) y las slides |
 | TFM-R10 | Entrega mediante el formulario de la lección Proyecto Final | p. 2, Entrega | Formulario localizado y envío realizado por el alumno, con comprobación disponible | Pendiente |
 | TFM-R11 | Datos y URLs del formulario | p. 2, Entrega | Nombre, email de inscripción, repo, slides, vídeo y despliegue/cuenta si corresponden | Pendiente |
 
@@ -22,7 +22,7 @@ Fuente: `M12_A01_D01__documentacion_tfm.md`, contrastado con el PDF original de 
 
 | ID | Naturaleza | Resultado | Evidencia | Estado |
 |---|---|---|---|---|
-| TFM-D01 | Despliegue recomendado por el PDF; objetivo expreso del alumno | CRM accesible en servidor propio y URL documentada si existe | Uso desde navegador externo, acceso de demo y persistencia | En curso: publicado en `https://crm.appzonegpt.com` (T28, 10/11/2026, código `a47c87b`) con túnel propio de Cloudflare; HTTPS, cabeceras, cookie Secure, límite de login y TLS mínimo 1.2 comprobados desde fuera; login de cliente y admin en el navegador del alumno. Sin probar: acceso desde otra red y restauración de la BD (T29) |
+| TFM-D01 | Despliegue recomendado por el PDF; objetivo expreso del alumno | CRM accesible en servidor propio y URL documentada si existe | Uso desde navegador externo, acceso de demo y persistencia | En curso: publicado en `https://crm.appzonegpt.com` (T28, 10/11/2026, código `a47c87b`) con túnel propio de Cloudflare; HTTPS, cabeceras, cookie Secure, límite de login y TLS mínimo 1.2 comprobados desde fuera; login de cliente y admin en el navegador del alumno. Persistencia (T29, 10/11/2026): copia diaria propia de la BD en otro disco del servidor (`scripts/crm_backup.sh`, `cron` a las 04:30 UTC, 14 diarias, pérdida máxima de 24 h) y restauración en un contenedor aislado sin diferencias con la BD publicada; vuelta atrás con migraciones documentada (copia manual antes de actualizar). Sin probar: acceso desde otra red, primera copia lanzada por `cron` (11/11) y restauración sobre la BD publicada; las copias están en el mismo servidor y sin cifrar |
 
 Rostro en vídeo: opcional. Fecha oficial: consultar el temario; no está en el PDF. Presentación y vídeo: no hay duración especificada. La adecuación técnica no sustituye la entrega documental.
 
