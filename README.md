@@ -1,38 +1,131 @@
 # crm-demo — CRM para pequeñas clínicas estéticas
 
-> **Estado: en desarrollo (Trabajo Fin de Máster, entrega noviembre de 2026).** Por ahora existen el esqueleto de la API, PostgreSQL en Docker, las migraciones de servicios y usuarios, un procedimiento para crear las cuentas de demo, login y logout con sesión en servidor y protección CSRF, y una interfaz con pantalla de login, un área por rol (la de administración lista los usuarios) y el estado de la API y de la base de datos; la gestión básica de contactos (alta, lista, búsqueda, ficha, edición, estado comercial y responsable) para recepción y administración, los servicios de la clínica (nombre, duración y quién los realiza) la agenda de recepción (citas de un día o de un mes por persona; dar una cita desde la agenda o desde la ficha; reprogramarla y cancelarla con motivo), sin solapamientos por persona, el área del profesional («Mi agenda» con solo sus citas y la ficha de sus contactos en solo lectura) la asistencia (Realizada / No presentado, con el paso a Cliente), el portal del cliente con sus citas, las tareas de seguimiento, en la ficha y en un panel de pendientes con contador, y un registro de auditoría que consulta administración. Las funciones del núcleo están completas; falta la publicación. Este README es provisional y se completará con hechos comprobados a medida que avance el proyecto.
+> **Trabajo Fin de Máster (noviembre de 2026).** Publicado en **https://crm.appzonegpt.com** con datos ficticios. Proyecto académico: no está preparado para datos reales de pacientes ni se presenta como conforme a HIPAA.
 
-## Descripción
+## Descripción general
 
-CRM web responsive para clínicas estéticas pequeñas y medianas de Estados Unidos. Objetivo: seguir el recorrido de un contacto desde la primera consulta comercial hasta la cita y su seguimiento, con un portal donde cada cliente consulta solo sus propias citas.
+**Para quién.** Clínicas estéticas pequeñas y medianas de Estados Unidos: una recepción que atiende consultas de Instagram, Google o por teléfono; profesionales que realizan tratamientos con cita; un responsable que quiere saber qué pasa en su clínica; y clientes que quieren consultar sus citas sin llamar.
 
-Núcleo previsto: login con cuatro roles (administración, recepción, profesional y cliente), contactos/leads, agenda por profesional sin solapamientos, seguimientos internos y portal de cliente por invitación.
+**Problema.** En una clínica pequeña los contactos se pierden entre mensajes y libretas, las agendas se pisan cuando dos personas dan cita a la vez y nadie recuerda a quién había que volver a llamar.
 
-**Solo datos ficticios.** Este proyecto académico no está preparado para tratar datos reales de pacientes ni se presenta como conforme a HIPAA.
+**Solución.** Un CRM web responsive (móvil y escritorio) que sigue el recorrido de una persona desde la primera consulta hasta que es clienta: contactos con estado comercial, agenda por profesional **sin solapamientos ni siquiera con peticiones simultáneas**, asistencia, tareas de seguimiento, auditoría y un **portal donde cada cliente ve solo sus citas**.
 
-## Stack previsto
+**Aportación propia.** El alcance, los estados y las reglas de negocio (roles, sin tildes para el mercado de EE. UU., una persona un contacto, plazo de corrección de la asistencia…) los decidió el alumno; el desarrollo se hizo en tareas pequeñas, cada una con pruebas y evidencia. Se aplican conocimientos del máster de backend (API REST, autenticación y autorización), bases de datos (modelo relacional, restricciones, transacciones y concurrencia), frontend (SPA con React y TypeScript), pruebas y despliegue con contenedores.
 
-- Backend: Python 3.13 + FastAPI, SQLAlchemy y Alembic
-- Base de datos: PostgreSQL 18.4 (imagen oficial fijada por digest en `compose.yaml`)
-- Frontend: React 19 + TypeScript 7 + Vite 8
-- Despliegue: Docker Compose
+## Funcionalidades principales
 
-Las versiones exactas se fijan al crear cada parte (backend: `backend/requirements*.txt`; frontend: `frontend/package-lock.json`).
+Cuatro roles, con permisos comprobados en la API (no solo ocultando botones):
 
-## Estructura prevista
+| Rol | Qué hace |
+|---|---|
+| **Administración** | Todo lo de recepción, más la lista de usuarios y la **auditoría** (quién hizo qué y cuándo, en solo lectura) |
+| **Recepción** | Contactos (alta, búsqueda sin tildes, ficha, edición, estado comercial, responsable); servicios y quién los realiza; **agenda** del día y del mes por persona: dar, reprogramar y cancelar citas con motivo; marcar asistencia; invitar al portal; tareas de seguimiento y panel de pendientes |
+| **Profesional** | «Mi agenda» con solo sus citas, la ficha de sus contactos en solo lectura, marcar la asistencia de sus citas y sus tareas |
+| **Cliente** | Portal «Mis citas»: próximas y anteriores con su estado, en solo lectura; nunca ve datos de otros clientes ni notas internas |
+
+Recorrido típico: recepción da de alta un contacto (Nuevo) → lo marca como Contactado → le da una cita (pasa a «Cita agendada») → el día de la cita se marca Realizada (pasa a Cliente) → se crea una tarea de seguimiento → se le invita al portal y consulta sus citas.
+
+Reglas destacadas:
+
+- **Sin solapamientos por persona**, garantizado por PostgreSQL (restricción de exclusión): de 20 peticiones simultáneas a la misma franja, solo se guarda una y las demás reciben un aviso claro.
+- **Bloqueo optimista**: si dos personas editan lo mismo, la segunda recibe un aviso en lugar de pisar el cambio.
+- **Horas de la clínica** (Nueva York), con los cambios de horario de verano bien resueltos.
+- **Portal aislado**: la identidad sale de la sesión; manipular parámetros o direcciones no da acceso a nada ajeno.
+- **Auditoría** de accesos, fichas abiertas y cambios (nombres de campos y estados, nunca el contenido de las notas).
+
+La referencia completa de la API y el recorrido detallado por la interfaz están al final, en el apéndice.
+
+## Acceso de prueba
+
+**URL:** https://crm.appzonegpt.com
+
+| Rol | Usuario | Contraseña |
+|---|---|---|
+| Cliente (portal, solo lectura) | `cliente@demo.example.com` | `333OxWWDVPxMZkxfzgHU` |
+
+Es una cuenta limitada de demostración, con datos ficticios: muestra el portal del cliente con sus citas próximas y pasadas, y no puede cambiar nada. Las cuentas internas (administración, recepción y profesional) no se publican: el acceso de administración se facilita al profesor por el formulario de entrega. Para ver todos los roles sin publicar contraseñas, el proyecto se puede ejecutar en local con sus propias cuentas de demo (sección «Instalación y ejecución», paso 5).
+
+## Publicación y acceso
+
+Publicado en **https://crm.appzonegpt.com** en un servidor Linux propio, con Docker Compose (`compose.prod.yaml`) y un túnel de Cloudflare: el servidor no abre puertos a Internet.
 
 ```
-backend/                API FastAPI, pruebas y migraciones (Alembic)
-frontend/               interfaz React + TypeScript (Vite)
-nginx/                  servidor web y proxy de /api (pendiente)
-compose.yaml            servicios Docker comunes (por ahora, PostgreSQL)
-compose.override.yaml   ajustes solo locales (puerto de la BD en 127.0.0.1)
-documentacion/          especificaciones, backlog y estado del proyecto
+Navegador ──HTTPS──> Cloudflare ──túnel──> cloudflared ──> nginx (interfaz + /api) ──> API FastAPI ──> PostgreSQL
+```
+
+- **Cinco servicios**: `db` (PostgreSQL), `migrate` (aplica las migraciones y los permisos en cada arranque y termina), `api`, `web` (nginx sin root, sirve la interfaz compilada y reenvía `/api/`) y `cloudflared`. La API y la BD están en una red interna sin salida a Internet; el conector solo alcanza a nginx.
+- **Seguridad comprobada desde fuera**: HTTPS obligatorio (HTTP redirige), TLS 1.2 como mínimo, cabeceras de seguridad (CSP, HSTS, `nosniff`, `DENY`, `no-referrer`), documentación de la API oculta en producción, cookie de sesión `HttpOnly`, `Secure` y `SameSite=lax`, y límite de intentos de login que no se puede engañar con cabeceras falsas.
+- **Usuario de BD limitado**: la API se conecta como `crm_app`, sin poder cambiar la estructura ni modificar la auditoría.
+- **Imágenes base fijadas por digest**; API, nginx y conector en contenedores de solo lectura, sin capacidades y sin root; límites de memoria y logs rotados en todos.
+- **Copias de seguridad**: copia diaria de la BD (`scripts/crm_backup.sh`, con `pg_dump`) en otro disco del servidor, con huella `sha256` y las 14 últimas conservadas; restauración comprobada en un contenedor aislado, idéntica a la BD publicada. Pérdida máxima: un día. Antes de actualizar se hace una copia manual, que permite volver a la versión anterior aunque haya migraciones.
+
+Para publicarlo en otro servidor (resumen; todos los valores, en `.env.prod.example`):
+
+```bash
+cp .env.prod.example .env      # rellenar: contraseñas aleatorias, clave, token del túnel, carpeta de la BD
+chmod 600 .env
+docker compose -f compose.prod.yaml build
+docker compose -f compose.prod.yaml up -d
+docker compose -f compose.prod.yaml run --rm seed     # cuentas y datos de demo
+```
+
+Siempre con `-f compose.prod.yaml`: sin él, Docker cargaría `compose.override.yaml`, que es de desarrollo y publica la BD.
+
+## Presentación
+
+Pendiente (se añadirá el enlace a las slides).
+
+## Vídeo explicativo
+
+Pendiente (se añadirá el enlace al vídeo).
+
+## Stack tecnológico
+
+| Parte | Tecnología |
+|---|---|
+| Backend | Python 3.13, FastAPI 0.143, SQLAlchemy 2.1, Alembic 1.20, Pydantic 2.14, psycopg 3.3, Argon2 (argon2-cffi 25.1), uvicorn 0.54 |
+| Base de datos | PostgreSQL 18.4 (imagen oficial fijada por digest) |
+| Frontend | React 19.3, React Router 8.4, TypeScript 7.0, Vite 8.3 |
+| Pruebas | pytest (backend, con una BD de pruebas real), Vitest 4.1 + Testing Library (frontend) |
+| Despliegue | Docker Compose, nginx (nginx-unprivileged 1.30), Cloudflare Tunnel (cloudflared 2026.10) |
+
+Decisiones: sesión en servidor con cookie `HttpOnly` en vez de JWT (se puede revocar al cerrar sesión) y token CSRF; reglas críticas en la BD (restricciones únicas, de comprobación y de exclusión) y no solo en el código; un único origen (nginx sirve la interfaz y la API), sin CORS. Todas las versiones están fijadas, incluidas las dependencias transitivas (`backend/requirements*.txt`, `frontend/package-lock.json`), y ninguna se adoptó en sus dos primeras semanas de publicación.
+
+## Estructura del proyecto
+
+```
+backend/
+  app/                  API FastAPI: rutas, modelos, permisos, auditoría, datos de demo
+  migrations/           migraciones de la BD (Alembic)
+  tests/                pruebas con pytest
+  Dockerfile            imagen de la API y de las migraciones
+frontend/
+  src/                  interfaz React + TypeScript: pantallas por rol, cliente de la API y pruebas
+  nginx.conf            servidor web de producción: interfaz, /api y cabeceras de seguridad
+  Dockerfile            compila la interfaz y la sirve con nginx
+scripts/
+  crm_backup.sh         copia de seguridad de la BD publicada
+compose.yaml            desarrollo: PostgreSQL
+compose.override.yaml   desarrollo: publica la BD solo en 127.0.0.1
+compose.prod.yaml       publicación: BD, migraciones, API, nginx y conector de Cloudflare
+compose.preprod.yaml    ensayo local de la publicación, sin Cloudflare
+.env.example            plantilla de configuración local (sin valores reales)
+.env.prod.example       plantilla de configuración de publicación (sin valores reales)
+documentacion/          estado del proyecto, especificaciones, backlog y matriz del TFM
 ```
 
 ## Instalación y ejecución
 
 Requisitos: Git, Python 3.13, Node.js 24 LTS y Docker Desktop (backend WSL2). En desarrollo, PostgreSQL corre en Docker y la API y Vite se ejecutan directamente en Windows.
+
+### 0. Obtener el código
+
+```powershell
+git clone https://github.com/MarotoG/crm-demo.git
+cd crm-demo
+```
+
+En un disco que no guarda propietarios (exFAT, típico de discos externos), Git descarga los archivos pero después se niega a trabajar con ellos («detected dubious ownership»). Se autoriza esa carpeta una vez, con la ruta que indica el propio mensaje: `git config --global --add safe.directory D:/ruta/crm-demo`. En NTFS no hace falta.
 
 ### 1. Configuración (`.env`)
 
@@ -63,6 +156,8 @@ docker compose down          # parar y eliminar el contenedor; los datos se cons
 
 Los datos viven en el volumen `crm-demo_db_data`. **`docker compose down -v` borra ese volumen y todos los datos.** El puerto 5432 solo se publica en `127.0.0.1`. `docker compose config` muestra la contraseña: no compartir su salida.
 
+El proyecto Compose se llama `crm-demo`. Si en el mismo equipo ya hay otra copia del repositorio con su BD, la segunda compartiría contenedor y datos con la primera: en esa terminal, darle otro nombre y otro puerto antes de arrancar (`$env:COMPOSE_PROJECT_NAME = "crm-demo-2"` y `CRM_DB_PORT=5433` en su `.env`).
+
 ### 3. Backend (API) en Windows
 
 Comandos comprobados en Windows 11 con PowerShell 5.1 y Python 3.13.0. Se usa `py -3.13` explícitamente porque el Python predeterminado del equipo puede ser otro.
@@ -87,6 +182,94 @@ Con la API en marcha:
 - `http://127.0.0.1:8000/api/health` → `{"status":"ok"}` (la API está viva; no consulta la BD)
 - `http://127.0.0.1:8000/api/health/db` → `{"status":"ok","database":"ok"}`, o HTTP 503 `{"status":"error","database":"unavailable"}` si la API no puede consultar PostgreSQL
 - `http://127.0.0.1:8000/docs` → documentación interactiva (Swagger UI; carga sus estilos y scripts desde un CDN, necesita Internet)
+- La referencia completa de las rutas está en el apéndice.
+
+**Protección CSRF.** Toda petición que cambie datos (salvo el login) debe llevar la cabecera `X-CSRF-Token` con el `csrf_token` que devuelven el login y `/api/auth/me`. Se calcula con `CRM_SECRET_KEY` (obligatoria para el login: al menos 32 caracteres y distinta del valor de ejemplo); si cambia la clave, los tokens anteriores dejan de valer y basta volver a pedir `/api/auth/me`.
+
+**Sesiones antiguas.** Cada login borra las sesiones caducadas hace más de 30 días. También puede hacerse a mano, desde `backend/`: `.venv\Scripts\python.exe -m app.purge_sessions` (solo muestra cuántas ha borrado). La tabla de sesiones no es un registro de auditoría de accesos a datos de clientes.
+
+**Pruebas y base de datos.** Las pruebas que necesitan PostgreSQL usan una base aparte, `crm_demo_test`, en el mismo contenedor: se crea sola la primera vez, se migra al empezar y cada prueba deshace sus cambios, así que `crm_demo` no se toca. Con la BD apagada esas pruebas se saltan con un aviso (`pytest -rs` muestra el motivo) y el resto se ejecuta.
+
+Dependencias: `requirements.txt` (ejecución) y `requirements-dev.txt` (pruebas), con todas las versiones fijadas, incluidas las transitivas.
+
+### 4. Frontend (interfaz) en Windows
+
+Comprobado con Node.js 24.22.1 y npm 11.19.1. En otra terminal, con la API en marcha:
+
+```powershell
+cd frontend
+npm ci              # instala exactamente lo que fija package-lock.json
+npm run dev         # http://127.0.0.1:5173 (Ctrl+C para parar)
+npm run build       # comprueba tipos (tsc) y genera dist/
+npm test            # pruebas de la interfaz (Vitest + Testing Library; no necesitan la API)
+```
+
+En desarrollo el navegador solo habla con Vite (puerto 5173), que reenvía `/api/*` a la API (puerto 8000).
+
+Al abrir `http://127.0.0.1:5173` aparece la pantalla de login. El recorrido detallado por cada pantalla está en el apéndice.
+
+### 5. Cuentas y datos de demostración (local)
+
+Hay una cuenta ficticia por rol, con email del dominio reservado `demo.example.com`. Las contraseñas no están en el código: se guardan en el `.env` local y se aplican con un comando. La BD solo guarda su hash Argon2id.
+
+| Rol | Email |
+|---|---|
+| Administración | `admin@demo.example.com` |
+| Recepción | `recepcion@demo.example.com` |
+| Profesional | `profesional@demo.example.com` |
+| Cliente | `cliente@demo.example.com` |
+
+1. En `.env`, rellenar `CRM_DEMO_PASSWORD_ADMIN`, `CRM_DEMO_PASSWORD_RECEPTION`, `CRM_DEMO_PASSWORD_PROFESSIONAL` y `CRM_DEMO_PASSWORD_CLIENT` con contraseñas ficticias de al menos 12 caracteres (por ejemplo, generadas con `py -3.13 -c "import secrets; print(secrets.token_urlsafe(12))"`).
+2. Con la BD en marcha y las migraciones aplicadas, desde `backend/`:
+
+```powershell
+.venv\Scripts\python.exe -m app.seed_demo
+```
+
+El comando se puede repetir: crea las cuentas que falten y, en las existentes, aplica la contraseña actual del `.env`, restaura el rol y las reactiva. La cuenta de cliente queda vinculada a un contacto ficticio, «Demo Cliente», que se crea si falta y aparece en la lista de contactos. Si falta alguna variable o es demasiado corta, no modifica la BD y dice cuál. Nunca muestra contraseñas ni hashes. La primera vez crea además datos ficticios para no enseñar un CRM vacío: 5 contactos, uno en cada estado comercial; 3 servicios; 9 citas alrededor de ese día, entre ellas las de la cuenta de cliente y dos pasadas sin marcar, para probar la asistencia y el estado «Sin confirmar» del portal; y 5 tareas vencidas, de hoy, próximas y hechas. Después ya no los toca, así que las fechas quedan fijas desde esa primera vez. Como no pasan por la API, no dejan eventos de auditoría. Con las cuentas creadas se puede entrar desde la pantalla de login; las credenciales de la versión publicada están en «Acceso de prueba».
+
+## Pruebas y comprobaciones
+
+Comandos (ver «Instalación y ejecución»): desde `backend/`, `.venv\Scripts\python.exe -m pytest`; desde `frontend/`, `npm test`.
+
+- **Backend**: 1113 pruebas con pytest, la mayoría contra una BD PostgreSQL de pruebas real (`crm_demo_test`): permisos por rol en todas las rutas (una prueba recorre todas para que ninguna quede sin proteger), validaciones, estados, horas de la clínica, aislamiento del portal y auditoría.
+- **Frontend**: 290 pruebas con Vitest y Testing Library (pantallas, permisos por rol, avisos y errores de la API).
+- **Pruebas de mutación**: en cada tarea de código se introdujeron fallos a propósito en el código para comprobar que alguna prueba los detectaba.
+- **Concurrencia real**: 20 peticiones simultáneas contra la API en 7 escenarios (misma franja de agenda, misma ficha, misma tarea…): siempre una guardada y las demás con aviso, nunca datos incoherentes.
+- **Navegador**: recorridos completos en Chrome de todos los roles, también a 390 px de ancho, sin errores de JavaScript.
+- **Publicación**: comprobada desde Internet (HTTPS, cabeceras, cookie, límite de login, TLS), login real de cliente y administración, y copia de seguridad restaurada en un entorno aislado.
+
+Límites: las pruebas de concurrencia usan un proceso de la API; no se ha probado con carga sostenida ni desde otra red móvil.
+
+## Decisiones y aprendizaje
+
+- **Trabajo en tareas pequeñas** (backlog atómico), cada una con criterios observables, pruebas y evidencia antes de pasar a la siguiente.
+- **La BD como última garantía**: lo que no puede fallar (duplicados, solapamientos, estados coherentes) lo exige PostgreSQL, porque comprobar antes de guardar no basta cuando dos peticiones llegan a la vez.
+- **Reproducir antes de arreglar**: un interbloqueo intermitente en la agenda solo apareció al ensayar en contenedores Linux; se buscó la forma de reproducirlo (16 de cada 100) antes de corregirlo (0 de 200).
+- **Mínimo privilegio**: usuario de BD limitado, contenedores sin root y el portal del cliente limitado a cinco campos por cita.
+- **Una copia no probada no es una copia**: la copia de seguridad se restauró y se comparó tabla a tabla.
+- **Uso de IA con revisión humana**: el código y los comandos se prepararon con ayuda de un asistente de IA (Claude Code); el alumno decidió el alcance y las reglas, revisó cada tarea y ejecutó en persona todo lo que tocaba el servidor.
+
+## Estado y limitaciones
+
+**Versión publicada:** código del commit `a47c87b`, en https://crm.appzonegpt.com. Los commits posteriores solo añaden documentación y el script de copias.
+
+Limitaciones conocidas:
+
+- Solo datos ficticios; no preparado para datos clínicos reales ni conforme a HIPAA. Las notas avisan de no escribir datos clínicos.
+- Sin recuperación de contraseña, sin notificaciones (email o push) y sin pagos.
+- El límite de intentos de login se cuenta en memoria por proceso: se reinicia al reiniciar la API.
+- La auditoría no es inalterable: la aplicación no la deja cambiar, pero quien administre la BD sí podría.
+- Las copias de seguridad están en el mismo servidor (otro disco) y sin cifrar.
+- Interfaz y datos sin tildes (decisión para el mercado de EE. UU.); la interfaz está en español.
+- Una clínica por instalación.
+
+Mejoras futuras: aplicación instalable (PWA), fotos antes/después, reserva de citas por el cliente, motivo de cancelación elegido desde el portal, nombre visible del personal y notificaciones.
+
+## Apéndice A. Referencia de la API
+
+Rutas bajo `/api` (en local, `http://127.0.0.1:8000`; en producción la documentación interactiva está desactivada):
+
 - `POST /api/auth/login` con `{"email": "...", "password": "..."}` → 200 con id, email, rol y `csrf_token`, y una cookie de sesión `crm_session` (HttpOnly, 8 h). Si las credenciales no son válidas: 401 «Email o contraseña incorrectos», el mismo mensaje exista o no el email; tras 5 fallos en 15 min para el mismo email desde la misma IP: 429
 - `GET /api/auth/me` → el usuario de la sesión actual y su `csrf_token`, o 401 sin sesión válida
 - `POST /api/auth/logout` con la cabecera `X-CSRF-Token: <csrf_token>` → 204: revoca la sesión de ese dispositivo (las de otros dispositivos siguen) y borra la cookie. Sin el token correcto: 403. Sin sesión válida: 204 igualmente
@@ -123,50 +306,6 @@ Con la API en marcha:
 - `GET /api/users` → lista de usuarios (id, email, rol, activo; nunca el hash), solo para el rol administrador: 403 «Permiso denegado» con otro rol y 401 sin sesión
 - Si PostgreSQL no responde, las rutas que lo usan devuelven 503 «Servicio no disponible», sin detalles
 
-**Protección CSRF.** Toda petición que cambie datos (salvo el login) debe llevar la cabecera `X-CSRF-Token` con el `csrf_token` que devuelven el login y `/api/auth/me`. Se calcula con `CRM_SECRET_KEY` (obligatoria para el login: al menos 32 caracteres y distinta del valor de ejemplo); si cambia la clave, los tokens anteriores dejan de valer y basta volver a pedir `/api/auth/me`.
-
-**Sesiones antiguas.** Cada login borra las sesiones caducadas hace más de 30 días. También puede hacerse a mano, desde `backend/`: `.venv\Scripts\python.exe -m app.purge_sessions` (solo muestra cuántas ha borrado). La tabla de sesiones no es un registro de auditoría de accesos a datos de clientes.
-
-**Pruebas y base de datos.** Las pruebas que necesitan PostgreSQL usan una base aparte, `crm_demo_test`, en el mismo contenedor: se crea sola la primera vez, se migra al empezar y cada prueba deshace sus cambios, así que `crm_demo` no se toca. Con la BD apagada esas pruebas se saltan con un aviso (`pytest -rs` muestra el motivo) y el resto se ejecuta.
-
-Dependencias: `requirements.txt` (ejecución) y `requirements-dev.txt` (pruebas), con todas las versiones fijadas, incluidas las transitivas.
-
-### 4. Frontend (interfaz) en Windows
-
-Comprobado con Node.js 24.22.1 y npm 11.19.1. En otra terminal, con la API en marcha:
-
-```powershell
-cd frontend
-npm ci              # instala exactamente lo que fija package-lock.json
-npm run dev         # http://127.0.0.1:5173 (Ctrl+C para parar)
-npm run build       # comprueba tipos (tsc) y genera dist/
-npm test            # pruebas de la interfaz (Vitest + Testing Library; no necesitan la API)
-```
-
-En desarrollo el navegador solo habla con Vite (puerto 5173), que reenvía `/api/*` a la API (puerto 8000).
+## Apéndice B. Recorrido detallado por la interfaz
 
 Al abrir `http://127.0.0.1:5173` aparece la pantalla de login, con el estado de la API y de la base de datos debajo. Al entrar, administración y recepción llegan a la **Agenda** y tienen una barra de secciones: Agenda (`/agenda`), Contactos (`/contactos`), Servicios (`/servicios`) y, solo administración, Usuarios (`/usuarios`). Las direcciones son las mismas para todos los roles que ven la sección; las anteriores (`/admin`, `/recepcion`, `/recepcion/contactos/7`…) llevan a la nueva. El profesional llega a **Mi agenda** (`/mi-agenda`) y su barra tiene Mi agenda y Mis servicios (`/mis-servicios`); la dirección antigua `/profesional` lleva a Mi agenda. El cliente va a **Mis citas** (`/portal`), sin barra y en solo lectura: «Próximas» y «Anteriores», con día, hora de Nueva York, servicio y estado (una cita pasada que la clínica no ha marcado sale como «Sin confirmar»); sin citas, «Aún no tienes citas. Escribe a la clínica para reservar.». Un contacto Perdido conserva el acceso. En la Agenda se ven las citas de un día por hora (inicio y fin, contacto con enlace a su ficha, servicio y quién la realiza), con «← Día anterior», «Día siguiente →», «Hoy», un calendario para ir a cualquier día y el filtro «Persona»; el día y el filtro quedan en la dirección (`/agenda?fecha=2026-11-10`), así que se puede recargar. «Nueva cita» abre el formulario: el contacto se busca por nombre, email o teléfono (los Perdidos no aparecen), el servicio solo ofrece los activos con alguien que los realice, «Quién la realiza» solo ofrece a sus personas (y queda elegida si solo hay una), y la hora se elige con dos desplegables (los minutos de 5 en 5), siempre en la hora de Nueva York. Al elegir la persona se ve qué citas tiene ya ese día. Si el contacto ya tiene otra cita a esa hora (con otra persona), se avisa, pero se puede guardar igualmente (dos servicios a la vez). Si la persona ya tiene una cita que se pisa, el 409 de la API se muestra junto al formulario. Cada cita Programada que aún no ha empezado tiene «Reprogramar» y «Cancelar cita». «Reprogramar» abre el mismo formulario con el contacto y el servicio fijos y la hora y la persona ya elegidas (`/agenda?reprogramar=12`, que se puede recargar); si otra persona cambió la cita mientras tanto, se avisa, la agenda se recarga y basta con revisar y volver a guardar. «Cancelar cita» abre en la misma fila un recuadro con el motivo (obligatorio) y un detalle opcional, con el aviso de no escribir datos clínicos. Las canceladas siguen en la lista, tachadas y con su motivo. Los botones «Día» y «Mes» cambian la vista (`?vista=mes`, que se puede recargar): la del mes muestra todas sus citas agrupadas por día, con «← Mes anterior», «Mes siguiente →» y «Este mes», «Ver el día» en cada día y, arriba, cuántas citas Programadas hay de cada servicio (para preparar el material; las canceladas no cuentan); desde el mes se puede reprogramar o cancelar sin ir día a día. En las citas que ya han empezado aparecen «Realizada» y «No presentado» (también en el mes y en Mi agenda, para las suyas); una ya marcada muestra su estado y, durante 7 días desde que se marcó, «Cambiar a No presentado» o «Cambiar a Realizada»; si otra persona la marcó antes, se avisa y la lista se recarga. «Solo mis citas» aplica el filtro con la propia cuenta, para el admin o la recepcionista que también realizan servicios. **Mi agenda** del profesional es la misma agenda, de día o de mes, solo con sus citas y en solo lectura: sin «Nueva cita», sin filtro de persona y sin reprogramar ni cancelar, pero con los botones de asistencia de sus citas. El nombre del contacto abre su ficha en solo lectura (sin editar, sin cambiar el estado ni dar cita), con «← Volver a mi agenda»; la de un contacto sin citas con él dice «Este contacto no existe o no tiene citas contigo». En Servicios, «Añadir servicio» pide el nombre, la duración en minutos y quién lo realiza (casillas con las cuentas internas activas); cada servicio muestra su duración, si está activo y quién lo realiza, con «Editar» y «Desactivar» o «Reactivar». Si un servicio activo no tiene a nadie disponible, se avisa de que no se podrán dar citas. En Contactos, «Nuevo contacto» abre el formulario; al guardar, el contacto aparece el primero de la lista; un dato no válido se explica junto a su campo y un duplicado, encima de los botones. El buscador filtra al dejar de escribir; los desplegables «Estado» (por defecto, los activos: todos menos Perdido) y «Responsable» (Todos, Mis contactos, Sin responsable) se combinan con él. Cada fila muestra el estado, el origen y el responsable. Cada nombre de la lista abre su ficha (`/contactos/7`, que se puede recargar), con «Dar cita» (abre el formulario de la agenda con el contacto ya elegido; no sale si está Perdido), las fechas en la hora de la clínica (Nueva York), el responsable, el botón «Editar» (que permite cambiar también el responsable) y los botones de estado permitidos: «Marcar como contactado», «Marcar como perdido» o «Reabrir (pasa a Contactado)». Si otra persona guardó la ficha mientras la editabas, se muestra lo que guardó con un aviso, en lugar de pisarlo. Bajo los datos, la ficha lista sus citas (la fecha lleva a la agenda de ese día; el profesional solo ve las suyas). Administración y recepción ven también «Portal del cliente»: «Invitar al portal» genera un enlace de un solo uso que caduca a las 24 h, con «Copiar enlace» para enviarlo a mano; solo se ve al generarlo y «Generar otro enlace» anula el anterior. No se ofrece a un contacto Perdido ni a quien ya tiene cuenta. El cliente abre el enlace (`/invitacion#…`), ve con qué email entrará y elige su contraseña; después entra por el login. Si recepción corrige el email de la ficha, cambia también con el que entra. Cada cita muestra su nota, y en la agenda se edita con «Añadir nota» o «Editar nota», sin reprogramar; en «Mi agenda» solo se lee, y el cliente no la ve. En la ficha, «Seguimientos» lista las tareas del contacto, primero las pendientes, y «Nueva tarea» pide qué hay que hacer, la fecha prevista y quién se encarga (un profesional solo aparece si el contacto tiene alguna cita con él). El profesional ve solo las suyas en «Tus seguimientos», sin crear tareas, y el cliente no las ve. **Pendientes** (`/pendientes`) es la sección de tareas, con un número en la barra: las vencidas y las de hoy (no hay notificaciones push). Agrupa las pendientes en Vencidas, Hoy y Próximas, y «Hechas» muestra quién las marcó y cuándo; la vista y la persona quedan en la dirección. Admin y recepción ven las de toda la clínica, con el filtro «Persona» y «Solo mías». Cada tarea enlaza a la ficha, avisa si el contacto está Perdido y tiene «Hecha» o «Reabrir», y «Editar» para admin y recepción, que permite reasignarla. El profesional ve solo las suyas, las completa y las reabre, pero no edita. Si otra persona cambió la tarea antes, se avisa y la lista se recarga. **Auditoría** (`/auditoria`, solo administración y en solo lectura) lista del más reciente al más antiguo quién hizo qué y cuándo: entradas, intentos fallidos y salidas, fichas abiertas y cambios de contactos, servicios, citas, invitaciones y tareas, con filtros por persona y por acción y de 50 en 50; los filtros y la página quedan en la dirección. Muestra qué campos cambiaron y los estados, pero nunca el contenido de una nota o una descripción. Las listas, las búsquedas y los accesos denegados no se registran (estos últimos quedan en el log). **Límite:** es una tabla normal: la aplicación no permite cambiarla ni borrarla, pero quien administre la base de datos sí podría, así que no es un registro inalterable. Los eventos no se borran automáticamente. **Límite de la demo:** no hay recuperación de contraseña: quien la olvide no tiene forma de restablecerla desde la aplicación. Si se escribe una tilde, en el formulario o en el buscador, aparece al momento el aviso «No se permiten tildes ni caracteres especiales (á, ñ, ü…)» y el contacto no se envía. Escribir a mano una sección que el rol no ve muestra «No tienes acceso a esta área», y la API rechaza igualmente sus datos (403). «Cerrar sesión» solo vuelve al login cuando la API confirma el cierre. Si la sesión caduca mientras se usa, vuelve al login con un aviso. Recargar la página mantiene la sesión: la app pregunta a `/api/auth/me` y guarda el token CSRF solo en memoria.
-
-### 5. Cuentas de demostración (local)
-
-Hay una cuenta ficticia por rol, con email del dominio reservado `demo.example.com`. Las contraseñas no están en el código: se guardan en el `.env` local y se aplican con un comando. La BD solo guarda su hash Argon2id.
-
-| Rol | Email |
-|---|---|
-| Administración | `admin@demo.example.com` |
-| Recepción | `recepcion@demo.example.com` |
-| Profesional | `profesional@demo.example.com` |
-| Cliente | `cliente@demo.example.com` |
-
-1. En `.env`, rellenar `CRM_DEMO_PASSWORD_ADMIN`, `CRM_DEMO_PASSWORD_RECEPTION`, `CRM_DEMO_PASSWORD_PROFESSIONAL` y `CRM_DEMO_PASSWORD_CLIENT` con contraseñas ficticias de al menos 12 caracteres (por ejemplo, generadas con `py -3.13 -c "import secrets; print(secrets.token_urlsafe(12))"`).
-2. Con la BD en marcha y las migraciones aplicadas, desde `backend/`:
-
-```powershell
-.venv\Scripts\python.exe -m app.seed_demo
-```
-
-El comando se puede repetir: crea las cuentas que falten y, en las existentes, aplica la contraseña actual del `.env`, restaura el rol y las reactiva. La cuenta de cliente queda vinculada a un contacto ficticio, «Demo Cliente», que se crea si falta y aparece en la lista de contactos. Si falta alguna variable o es demasiado corta, no modifica la BD y dice cuál. Nunca muestra contraseñas ni hashes. La primera vez crea además datos ficticios para no enseñar un CRM vacío: 5 contactos, uno en cada estado comercial; 3 servicios; 9 citas alrededor de ese día, entre ellas las de la cuenta de cliente y dos pasadas sin marcar, para probar la asistencia y el estado «Sin confirmar» del portal; y 5 tareas vencidas, de hoy, próximas y hechas. Después ya no los toca, así que las fechas quedan fijas desde esa primera vez. Como no pasan por la API, no dejan eventos de auditoría. Con las cuentas creadas se puede entrar desde la pantalla de login; las credenciales de prueba de la entrega se documentarán antes de entregar.
-
-## Pendiente de completar
-
-Funcionalidades verificadas, cuentas de demostración, URL de publicación, slides, vídeo, pruebas y limitaciones.
